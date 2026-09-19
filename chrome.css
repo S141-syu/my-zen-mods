@@ -1,0 +1,46 @@
+/* Folder Open Tabs — Zen Browser 1.22.2b.
+ * Loaded tabs remain visible inside collapsed folders.
+ * This stylesheet changes presentation, not Zen's tab lifecycle.
+ */
+
+/* An inset outline does not change tab dimensions or the selected background. */
+#tabbrowser-tabs zen-folder .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing], [selected], [visuallyselected]) > .tab-stack > .tab-background {
+  outline: 1px solid color-mix(in srgb, currentColor 48%, transparent) !important;
+  outline-offset: -1px !important;
+}
+
+/* Zen collapses the container and applies negative spacer margins. */
+#tabbrowser-tabs zen-folder[collapsed] .tab-group-container {
+  display: flex !important;
+  flex-direction: column !important;
+  height: auto !important;
+  max-height: none !important;
+  opacity: 1 !important;
+}
+
+#tabbrowser-tabs zen-folder[collapsed] .zen-tab-group-start {
+  display: none !important;
+  margin-top: 0 !important;
+}
+
+/* Keep the ancestry of loaded tabs, including nested folders. */
+#tabbrowser-tabs zen-folder[collapsed] zen-folder:not(:has(.tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing]))) {
+  display: none !important;
+}
+
+#tabbrowser-tabs zen-folder[collapsed] zen-folder:has(.tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing])) > .tab-group-label-container {
+  height: calc(var(--tab-min-height) + 2 * var(--tab-margin-block)) !important;
+  opacity: 1 !important;
+}
+
+#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:is([pending], [discarded], [zen-empty-tab]) {
+  display: none !important;
+}
+
+#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing]) {
+  display: flex !important;
+  height: auto !important;
+  min-height: var(--tab-min-height) !important;
+  max-height: none !important;
+  opacity: 1 !important;
+}

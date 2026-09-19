@@ -1,0 +1,6 @@
+{
+  "version": "1.22.2b",
+  "loadMethod": "userChrome.css @import",
+  "presentationChecks": "passed",
+  "nativeVisibilityMismatch": true
+}

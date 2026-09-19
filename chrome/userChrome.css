@@ -1,0 +1,5 @@
+/*
+ * Copy this file to the Zen profile's chrome/userChrome.css.
+ * Keep folder-open-tabs.css beside it in the same chrome folder.
+ */
+@import url("folder-open-tabs.css");
