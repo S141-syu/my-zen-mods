@@ -5,8 +5,27 @@
 
 /* An inset outline does not change tab dimensions or the selected background. */
 #tabbrowser-tabs zen-folder .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing], [selected], [visuallyselected]) > .tab-stack > .tab-background {
-  outline: 1px solid color-mix(in srgb, currentColor 48%, transparent) !important;
+  outline: 1.5px solid color-mix(in srgb, currentColor 56%, transparent) !important;
   outline-offset: -1px !important;
+}
+
+/* Keep every vertical-sidebar tab highlight at the same 13px radius. */
+#tabbrowser-tabs[orient="vertical"] .tabbrowser-tab > .tab-stack > .tab-background,
+#tabbrowser-tabs[orient="vertical"] .tabbrowser-tab > .tab-stack > .tab-background::before {
+  border-radius: 13px !important;
+  corner-shape: round !important;
+}
+
+/* Match folder-label hover highlights to the tab backgrounds. */
+#tabbrowser-tabs[orient="vertical"] zen-folder > .tab-group-label-container,
+#tabbrowser-tabs[orient="vertical"] zen-folder > .tab-group-label-container::before {
+  border-radius: 13px !important;
+  corner-shape: round !important;
+}
+
+/* Set tab names to 13px. */
+#tabbrowser-tabs[orient="vertical"] .tabbrowser-tab .tab-label {
+  font-size: 13px !important;
 }
 
 /* Zen collapses the container and applies negative spacer margins. */
