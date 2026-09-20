@@ -16,6 +16,13 @@
   corner-shape: round !important;
 }
 
+/* Keep close and unload hover targets rounded without turning them circular. */
+#tabbrowser-tabs[orient="vertical"] .tabbrowser-tab :is(.tab-close-button, .tab-reset-button),
+#tabbrowser-tabs[orient="vertical"] zen-folder > .tab-group-label-container > .tab-reset-button {
+  border-radius: 8px !important;
+  corner-shape: round !important;
+}
+
 /* Match folder-label hover highlights to the tab backgrounds. */
 #tabbrowser-tabs[orient="vertical"] zen-folder > .tab-group-label-container,
 #tabbrowser-tabs[orient="vertical"] zen-folder > .tab-group-label-container::before {

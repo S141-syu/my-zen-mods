@@ -78,10 +78,13 @@ try {
   const state = () => run(`
     return window.__folderTest.tabs.map(t => {
       const box = t.getBoundingClientRect(), bg = getComputedStyle(t.querySelector('.tab-background'));
+      const closeButton = getComputedStyle(t.querySelector('.tab-close-button'));
+      const resetButton = getComputedStyle(t.querySelector('.tab-reset-button'));
       return { top:box.top, bottom:box.bottom, height:box.height, opacity:getComputedStyle(t).opacity,
         selected:t.selected, pending:t.hasAttribute('pending'),
         outlined:t.matches('#tabbrowser-tabs zen-folder .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing], [selected], [visuallyselected])'),
         outlineWidth:bg.outlineWidth, outlineOffset:bg.outlineOffset,
+        closeButtonRadius:closeButton.borderRadius, resetButtonRadius:resetButton.borderRadius,
         background:bg.backgroundColor, internalVisible:t.visible, ariaHidden:t.getAttribute('aria-hidden') };
     });
   `);
@@ -136,6 +139,13 @@ try {
   assert(result[1].height > 0 && result[1].outlined, 'Loaded background tab remains outlined');
   assert.equal(result[1].outlineWidth, '1px');
   assert.equal(result[1].outlineOffset, '-1px', 'Outline is loaded through userChrome.css');
+  assert.equal(result[1].closeButtonRadius, '8px', 'Close button uses a rounded-square radius');
+  assert.equal(result[1].resetButtonRadius, '8px', 'Unload button uses a rounded-square radius');
+  assert.equal(
+    await run("return getComputedStyle(window.__folderTest.folder.resetButton).borderRadius;"),
+    '8px',
+    'Folder unload button uses the same rounded-square radius'
+  );
   assert.equal(result[2].height, 0, 'Unloaded tab is hidden when collapsed');
   const nativeVisibilityMismatch = !result[1].internalVisible && result[1].ariaHidden === 'true';
   console.log('PASS: collapsed selection / loaded / unloaded presentation');
