@@ -108,7 +108,7 @@ try {
       animationDuration: animation?.effect.getTiming().duration,
       animationKeyframes: animation?.effect.getKeyframes().map(frame => ({
         offset: frame.computedOffset,
-        top: frame.top,
+        transform: frame.transform,
         easing: frame.easing,
       })),
     };
@@ -192,13 +192,14 @@ try {
   assert.equal(highlightDuringMove.animationDuration, 360);
   assert.deepEqual(highlightDuringMove.animationKeyframes.map(frame => frame.offset), [0, 0.68, 0.86, 1]);
   const motionDirection = Math.sign(highlightDuringMove.selectedTop - highlightBeforeMove.top);
-  const overshootTop = parseFloat(highlightDuringMove.animationKeyframes[1].top);
-  const reboundTop = parseFloat(highlightDuringMove.animationKeyframes[2].top);
+  const translateY = frame => Number(/translate\([^,]+px, ([^)]+)px\)/.exec(frame.transform)?.[1]);
+  const overshootOffset = translateY(highlightDuringMove.animationKeyframes[1]);
+  const reboundOffset = translateY(highlightDuringMove.animationKeyframes[2]);
   const travelDistance = Math.abs(highlightDuringMove.selectedTop - highlightBeforeMove.top);
-  const overshootRatio = Math.abs(overshootTop - highlightDuringMove.selectedTop) / travelDistance;
-  const reboundRatio = Math.abs(reboundTop - highlightDuringMove.selectedTop) / travelDistance;
+  const overshootRatio = Math.abs(overshootOffset) / travelDistance;
+  const reboundRatio = Math.abs(reboundOffset) / travelDistance;
   assert(
-    motionDirection * (overshootTop - highlightDuringMove.selectedTop) > 0,
+    motionDirection * overshootOffset > 0,
     'Spring keyframe moves slightly beyond the destination'
   );
   assert(overshootRatio > 0.035 && overshootRatio < 0.045, 'Spring overshoot stays near four percent');
@@ -241,6 +242,44 @@ try {
   assert.equal(result[0].height,0,'Newly unloaded tab disappears without reload');
   assert(result[1].height>0,'Other loaded tab remains');
   console.log('PASS: live unload update');
+
+  await run(`
+    const principal = Services.scriptSecurityManager.getSystemPrincipal();
+    const unloadedAbove = gBrowser.addTab('about:blank', { triggeringPrincipal: principal, skipAnimation: true });
+    const selectedBelow = gBrowser.addTab('about:blank', { triggeringPrincipal: principal, skipAnimation: true });
+    const folder = gZenFolders.createFolder([unloadedAbove, selectedBelow], { label: 'Moving selection' });
+    gBrowser.selectedTab = selectedBelow;
+    gBrowser.discardBrowser(unloadedAbove, true);
+    window.__layoutMotionTest = { unloadedAbove, selectedBelow, folder };
+  `);
+  await sleep(500);
+  const expandedLayout = await selectionHighlightState();
+  await run('window.__layoutMotionTest.folder.collapsed=true;');
+  await sleep(70);
+  const closingLayout = await selectionHighlightState();
+  assert(closingLayout.selectedTop < expandedLayout.selectedTop, 'Selected tab moves upward while its folder closes');
+  assert(
+    Math.abs(closingLayout.top - closingLayout.selectedTop) < 0.75,
+    'Selected highlight follows the tab during folder collapse'
+  );
+  await sleep(500);
+  const collapsedLayout = await selectionHighlightState();
+  await run('window.__layoutMotionTest.folder.collapsed=false;');
+  await sleep(70);
+  const openingLayout = await selectionHighlightState();
+  assert(openingLayout.selectedTop > collapsedLayout.selectedTop, 'Selected tab moves downward while its folder opens');
+  assert(
+    Math.abs(openingLayout.top - openingLayout.selectedTop) < 0.75,
+    'Selected highlight follows the tab during folder expansion'
+  );
+  await sleep(500);
+  const expandedAgainLayout = await selectionHighlightState();
+  assert(
+    Math.abs(expandedAgainLayout.top - expandedAgainLayout.selectedTop) < 0.5,
+    'Selected highlight finishes on the moved tab'
+  );
+  console.log('PASS: selected highlight tracks folder layout motion');
+
   await run('gBrowser.selectedTab=window.__folderTest.tabs[1];');
   await sleep(300);
   await writeFile(path.join(root,'tests','results.json'), JSON.stringify({version:'1.22.2b',loadMethod:'userChrome.css @import',presentationChecks:'passed',nativeVisibilityMismatch},null,2));

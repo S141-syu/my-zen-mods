@@ -23,7 +23,8 @@
   box-sizing: border-box;
   pointer-events: none;
   contain: layout style paint;
-  will-change: top, left, width, height;
+  transform-origin: top left;
+  will-change: top, left, width, height, transform;
 }
 
 #folder-open-tabs-selection-highlight[hidden] {
