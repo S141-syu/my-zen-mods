@@ -89,6 +89,16 @@ try {
         background:bg.backgroundColor, internalVisible:t.visible, ariaHidden:t.getAttribute('aria-hidden') };
     });
   `);
+  const folderMotionState = () => run(`
+    const folder = window.__folderTest.folder;
+    return folder.getAnimations({ subtree: true }).map(animation => ({
+      id: animation.id,
+      name: animation.animationName,
+      duration: animation.effect?.getTiming().duration,
+      easing: animation.effect?.getTiming().easing,
+      keyframeEasings: animation.effect?.getKeyframes().map(frame => frame.easing),
+    }));
+  `);
   const selectionHighlightState = () => run(`
     const highlight = document.getElementById('folder-open-tabs-selection-highlight');
     const selected = document.querySelector('#tabbrowser-tabs .tabbrowser-tab[selected] > .tab-stack > .tab-background');
@@ -214,6 +224,22 @@ try {
   await run('window.__folderTest.folder.collapsed=false;');
   await sleep(40);
   const opening = await state();
+  const openingMotion = await folderMotionState();
+  const openingToggleMotion = openingMotion.filter(animation => animation.duration === 280);
+  assert(
+    openingToggleMotion.length > 0,
+    'Folder expansion uses the slower 280ms motion'
+  );
+  assert(
+    openingMotion.every(animation => animation.duration !== 180),
+    'Folder expansion does not retain Zen native 180ms timing'
+  );
+  assert(
+    openingToggleMotion.every(animation =>
+      animation.easing === 'ease-in-out' || animation.keyframeEasings?.includes('ease-in-out')
+    ),
+    'Folder expansion uses ease-in-out throughout'
+  );
   assert(
     opening[0].height > 0 && opening[1].height > 0 && opening[1].opacity === '1',
     'Loaded tabs keep their natural size while the folder expands'
@@ -227,6 +253,22 @@ try {
   await run('window.__folderTest.folder.collapsed=true;');
   await sleep(60);
   const closing = await state();
+  const closingMotion = await folderMotionState();
+  const closingToggleMotion = closingMotion.filter(animation => animation.duration === 280);
+  assert(
+    closingToggleMotion.length > 0,
+    'Folder collapse uses the slower 280ms motion'
+  );
+  assert(
+    closingMotion.every(animation => animation.duration !== 180),
+    'Folder collapse does not retain Zen native 180ms timing'
+  );
+  assert(
+    closingToggleMotion.every(animation =>
+      animation.easing === 'ease-in-out' || animation.keyframeEasings?.includes('ease-in-out')
+    ),
+    'Folder collapse uses ease-in-out throughout'
+  );
   assert(
     closing[1].height > 0 && closing[1].opacity === '1',
     'Loaded background tab remains visible during collapse'
@@ -623,7 +665,7 @@ try {
 
   await run('gBrowser.selectedTab=window.__folderTest.tabs[1];');
   await sleep(300);
-  await writeFile(path.join(root,'tests','results.json'), JSON.stringify({version:'1.22.2b',loadMethod:'userChrome.css @import',presentationChecks:'passed',nativeVisibilityMismatch},null,2));
+  await writeFile(path.join(root,'tests','results.json'), `${JSON.stringify({version:'1.22.2b',loadMethod:'userChrome.css @import',presentationChecks:'passed',nativeVisibilityMismatch},null,2)}\n`);
   console.log(`LIMITATION: CSS-only internal visibility mismatch = ${nativeVisibilityMismatch}`);
   await send('Marionette:Quit', { flags: ['eForceQuit'] });
 } finally {

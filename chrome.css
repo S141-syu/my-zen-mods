@@ -3,15 +3,24 @@
  * This stylesheet changes presentation, not Zen's tab lifecycle.
  */
 
+:root {
+  --folder-open-tabs-toggle-duration: 280ms;
+  --folder-open-tabs-toggle-easing: ease-in-out;
+}
+
 /* An inset outline does not change tab dimensions or the selected background. */
 #tabbrowser-tabs zen-folder .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing], [selected], [visuallyselected]) > .tab-stack > .tab-background {
   outline: 1.5px solid color-mix(in srgb, currentColor 56%, transparent) !important;
   outline-offset: -1px !important;
 }
 
-/* Keep every vertical-sidebar tab highlight at the same 13px radius. */
+/* Keep every vertical-sidebar hover highlight at the same 13px radius. */
 #tabbrowser-tabs[orient="vertical"] .tabbrowser-tab > .tab-stack > .tab-background,
-#tabbrowser-tabs[orient="vertical"] .tabbrowser-tab > .tab-stack > .tab-background::before {
+#tabbrowser-tabs[orient="vertical"] .tabbrowser-tab > .tab-stack > .tab-background::before,
+#tabbrowser-tabs[orient="vertical"] #tabs-newtab-button,
+#tabbrowser-tabs[orient="vertical"] #vertical-tabs-newtab-button,
+.zen-current-workspace-indicator,
+.zen-current-workspace-indicator::before {
   border-radius: 13px !important;
   corner-shape: round !important;
 }
@@ -47,6 +56,12 @@
 #tabbrowser-tabs[orient="vertical"] zen-folder > .tab-group-label-container::before {
   border-radius: 13px !important;
   corner-shape: round !important;
+}
+
+/* Match the folder icon to the slower tab reveal and collapse motion. */
+#tabbrowser-tabs zen-folder > .tab-group-label-container .tab-group-folder-icon svg :is(g, rect, path) {
+  transition-duration: var(--folder-open-tabs-toggle-duration) !important;
+  transition-timing-function: var(--folder-open-tabs-toggle-easing) !important;
 }
 
 /* Set tab names to 13px. */
@@ -100,7 +115,7 @@
   display: flex !important;
   min-height: 0 !important;
   overflow: hidden !important;
-  animation: folder-open-tabs-collapse-unloaded 180ms ease-in-out both !important;
+  animation: folder-open-tabs-collapse-unloaded var(--folder-open-tabs-toggle-duration) var(--folder-open-tabs-toggle-easing) both !important;
 }
 
 /*

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Folder Open Tabs Motion
 // @description  Adds smooth selection, page-depth, and ungrouped-tab close motion to Zen.
-// @version      0.4.6
+// @version      0.4.10
 // @lastUpdated  2026-09-21
 // ==/UserScript==
 
@@ -12,6 +12,9 @@
   const PAGE_DEPTH_ANIMATION_ID = "folder-open-tabs-page-depth";
   const CLOSE_PARTICLE_EFFECT_CLASS = "folder-open-tabs-close-particle-effect";
   const CLOSE_PARTICLE_CLASS = "folder-open-tabs-close-particle";
+  const FOLDER_TOGGLE_DURATION = 280;
+  const NATIVE_FOLDER_TOGGLE_DURATION = 180;
+  const FOLDER_TOGGLE_EASING = "ease-in-out";
   const DURATION = 360;
   const PAGE_DEPTH_DURATION = 160;
   const PAGE_DEPTH_START_SCALE = 0.985;
@@ -107,7 +110,70 @@
         subtree: true,
         attributeFilter: ["collapsed", "hidden", "selected", "style", "visuallyselected"],
       });
+      this.restoreFolderAnimationTiming = this.installFolderAnimationTiming();
       this.moveTo(this.window.gBrowser.selectedTab, false);
+    }
+
+    installFolderAnimationTiming() {
+      const folders = this.window.gZenFolders;
+      if (!folders) {
+        return () => {};
+      }
+
+      const restorers = ["animateCollapse", "animateExpand"].flatMap(methodName => {
+        const original = folders[methodName];
+        if (typeof original !== "function") {
+          return [];
+        }
+
+        const hadOwnMethod = Object.prototype.hasOwnProperty.call(folders, methodName);
+        const controller = this;
+        const wrapped = function (group, ...args) {
+          const animationsBefore = new Set(
+            group?.getAnimations?.({ subtree: true }) ?? []
+          );
+          const result = original.call(this, group, ...args);
+          controller.retimeFolderAnimations(group, animationsBefore);
+          controller.window.queueMicrotask(() =>
+            controller.retimeFolderAnimations(group, animationsBefore)
+          );
+          return result;
+        };
+
+        folders[methodName] = wrapped;
+        return [() => {
+          if (folders[methodName] !== wrapped) {
+            return;
+          }
+          if (hadOwnMethod) {
+            folders[methodName] = original;
+          } else {
+            delete folders[methodName];
+          }
+        }];
+      });
+
+      return () => restorers.forEach(restore => restore());
+    }
+
+    retimeFolderAnimations(group, animationsBefore) {
+      if (!group?.getAnimations) {
+        return;
+      }
+
+      for (const animation of group.getAnimations({ subtree: true })) {
+        if (animationsBefore.has(animation) || animation.id?.startsWith("folder-open-tabs-")) {
+          continue;
+        }
+        const effect = animation.effect;
+        if (!effect || effect.getTiming().duration !== NATIVE_FOLDER_TOGGLE_DURATION) {
+          continue;
+        }
+        effect.updateTiming({
+          duration: FOLDER_TOGGLE_DURATION,
+          easing: FOLDER_TOGGLE_EASING,
+        });
+      }
     }
 
     getBackground(tab) {
@@ -688,6 +754,7 @@
 
     destroy() {
       this.animation?.cancel();
+      this.restoreFolderAnimationTiming?.();
       this.cancelPageDepth();
       this.clearCloseEffects();
       this.clearCloseLayoutMotions();
