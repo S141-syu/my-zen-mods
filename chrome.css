@@ -28,7 +28,19 @@
   font-size: 13px !important;
 }
 
-/* Zen collapses the container and applies negative spacer margins. */
+@keyframes folder-open-tabs-collapse-unloaded {
+  from {
+    max-height: calc(var(--tab-min-height) + 2 * var(--tab-margin-block));
+    opacity: 1;
+  }
+
+  to {
+    max-height: 0;
+    opacity: 0;
+  }
+}
+
+/* Keep Zen's hidden container in layout so loaded tabs remain visible. */
 #tabbrowser-tabs zen-folder[collapsed] .tab-group-container {
   display: flex !important;
   flex-direction: column !important;
@@ -37,6 +49,7 @@
   opacity: 1 !important;
 }
 
+/* Never let Zen's negative spacer move retained loaded tabs out of view. */
 #tabbrowser-tabs zen-folder[collapsed] .zen-tab-group-start {
   display: none !important;
   margin-top: 0 !important;
@@ -52,14 +65,36 @@
   opacity: 1 !important;
 }
 
-#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:is([pending], [discarded], [zen-empty-tab]) {
+#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:is([zen-empty-tab], [hidden], [closing]) {
   display: none !important;
 }
 
-#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing]) {
+/* Collapse only unloaded tabs; this also handles tabs unloaded while closed. */
+#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
   display: flex !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  animation: folder-open-tabs-collapse-unloaded 180ms ease-in-out both !important;
+}
+
+/*
+ * Keep loaded tabs at their natural size across both collapse and expand.
+ * Zen leaves height: 0 and opacity: 0 inline after collapsing; limiting this
+ * override to [collapsed] makes those styles flash back during expansion.
+ */
+#tabbrowser-tabs zen-folder .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing]) {
   height: auto !important;
   min-height: var(--tab-min-height) !important;
   max-height: none !important;
   opacity: 1 !important;
+}
+
+#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing]) {
+  display: flex !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
+    animation-duration: 0s !important;
+  }
 }

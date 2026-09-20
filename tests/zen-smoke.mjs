@@ -78,7 +78,7 @@ try {
   const state = () => run(`
     return window.__folderTest.tabs.map(t => {
       const box = t.getBoundingClientRect(), bg = getComputedStyle(t.querySelector('.tab-background'));
-      return { height: box.height, opacity:getComputedStyle(t).opacity,
+      return { top:box.top, bottom:box.bottom, height:box.height, opacity:getComputedStyle(t).opacity,
         selected:t.selected, pending:t.hasAttribute('pending'),
         outlined:t.matches('#tabbrowser-tabs zen-folder .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing], [selected], [visuallyselected])'),
         outlineWidth:bg.outlineWidth, outlineOffset:bg.outlineOffset,
@@ -106,6 +106,31 @@ try {
     return tabs.map(t => ({label: t.label, pending:t.hasAttribute('pending'), discarded:t.hasAttribute('discarded')}));
   `)));
   await sleep(1000);
+  await run('window.__folderTest.folder.collapsed=false;');
+  await sleep(40);
+  const opening = await state();
+  assert(
+    opening[0].height > 0 && opening[1].height > 0 && opening[1].opacity === '1',
+    'Loaded tabs keep their natural size while the folder expands'
+  );
+  assert(
+    opening[1].top >= opening[0].bottom - 0.5,
+    'Loaded background tabs do not overlap the first tab while expanding'
+  );
+  await sleep(460);
+  const expandedBeforeClosing = await state();
+  await run('window.__folderTest.folder.collapsed=true;');
+  await sleep(60);
+  const closing = await state();
+  assert(
+    closing[1].height > 0 && closing[1].opacity === '1',
+    'Loaded background tab remains visible during collapse'
+  );
+  assert(
+    closing[2].height < expandedBeforeClosing[2].height || closing[2].opacity < 0.99,
+    'Unloaded tab participates in the closing animation'
+  );
+  await sleep(500);
   let result = await state();
   assert(result[0].height > 0 && !result[0].outlined, 'Selected tab keeps the native appearance');
   assert(result[1].height > 0 && result[1].outlined, 'Loaded background tab remains outlined');
