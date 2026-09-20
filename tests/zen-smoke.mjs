@@ -92,9 +92,12 @@ try {
   const selectionHighlightState = () => run(`
     const highlight = document.getElementById('folder-open-tabs-selection-highlight');
     const selected = document.querySelector('#tabbrowser-tabs .tabbrowser-tab[selected] > .tab-stack > .tab-background');
+    const selectedTab = selected?.closest('.tabbrowser-tab');
     const highlightBox = highlight?.getBoundingClientRect();
     const selectedBox = selected?.getBoundingClientRect();
     const animation = highlight?.getAnimations()[0];
+    const highlightStyle = highlight && getComputedStyle(highlight);
+    const selectedStyle = selected && getComputedStyle(selected);
     return {
       top: highlightBox?.top,
       left: highlightBox?.left,
@@ -104,13 +107,86 @@ try {
       selectedLeft: selectedBox?.left,
       selectedWidth: selectedBox?.width,
       selectedHeight: selectedBox?.height,
-      targetMarked: selected?.closest('.tabbrowser-tab')?.hasAttribute('folder-open-tabs-selection-target'),
+      targetMarked: selectedTab?.hasAttribute('folder-open-tabs-selection-target'),
+      selectedHovered: selectedTab?.matches(':hover'),
+      highlightBackground: highlightStyle?.background,
+      highlightBorder: highlightStyle?.border,
+      highlightBoxShadow: highlightStyle?.boxShadow,
+      selectedBackground: selectedStyle?.background,
+      selectedBorder: selectedStyle?.border,
+      selectedBoxShadow: selectedStyle?.boxShadow,
       animationDuration: animation?.effect.getTiming().duration,
       animationKeyframes: animation?.effect.getKeyframes().map(frame => ({
         offset: frame.computedOffset,
         transform: frame.transform,
         easing: frame.easing,
       })),
+    };
+  `);
+  const pageDepthState = () => run(`
+    const browser = gBrowser.selectedBrowser;
+    const animation = browser?.getAnimations().find(item => item.id === 'folder-open-tabs-page-depth');
+    const computedScale = browser ? getComputedStyle(browser).scale : null;
+    return {
+      scale: computedScale === 'none' ? 1 : Number(computedScale),
+      duration: animation?.effect.getTiming().duration,
+      easing: animation?.effect.getTiming().easing,
+      keyframes: animation?.effect.getKeyframes().map(frame => ({
+        offset: frame.computedOffset,
+        scale: Number(frame.scale),
+      })),
+    };
+  `);
+  const closeParticleState = () => run(`
+    const effects = [...document.querySelectorAll('.folder-open-tabs-close-particle-effect')];
+    const effect = effects.at(-1);
+    const particles = effect
+      ? [...effect.querySelectorAll('.folder-open-tabs-close-particle')]
+      : [];
+    const particleAnimations = particles.map(particle =>
+      particle.getAnimations().find(item => item.id === 'folder-open-tabs-close-particle')
+    );
+    const layoutAnimations = [
+      ...document.querySelectorAll('#tabbrowser-tabs .tabbrowser-tab, #tabbrowser-tabs zen-folder'),
+    ].flatMap(element =>
+      element.getAnimations().filter(item => item.id === 'folder-open-tabs-close-layout')
+    );
+    return {
+      effectCount: effects.length,
+      renderer: effect?.dataset.renderer,
+      ghostCount: effect?.querySelectorAll('.folder-open-tabs-close-particle-ghost').length ?? 0,
+      closedTabConnected: window.__closeParticleTest?.tab?.isConnected ?? false,
+      closedTabVisibility: window.__closeParticleTest?.tab
+        ? getComputedStyle(window.__closeParticleTest.tab).visibility
+        : null,
+      particleCount: particles.length,
+      particleDurations: particleAnimations.map(animation => animation.effect.getTiming().duration),
+      particleDelays: particleAnimations.map(animation => animation.effect.getTiming().delay),
+      activeParticleCount: particleAnimations.filter(
+        animation => animation.playState === 'running' || animation.playState === 'pending'
+      ).length,
+      layoutAnimationCount: layoutAnimations.length,
+      layoutDurations: layoutAnimations.map(animation => animation.effect.getTiming().duration),
+      layoutDelays: layoutAnimations.map(animation => animation.effect.getTiming().delay),
+      layoutEasings: layoutAnimations.map(animation => animation.effect.getTiming().easing),
+      finalTranslateY: particleAnimations.map(animation => {
+        const transform = animation.effect.getKeyframes().at(-1).transform;
+        return new DOMMatrixReadOnly(transform).m42;
+      }),
+    };
+  `);
+  const closeLayoutState = () => run(`
+    const animations = [
+      ...document.querySelectorAll('#tabbrowser-tabs .tabbrowser-tab, #tabbrowser-tabs zen-folder'),
+    ].flatMap(element =>
+      element.getAnimations().filter(item => item.id === 'folder-open-tabs-close-layout')
+    );
+    return {
+      top: window.__closeParticleTest.followingTab.getBoundingClientRect().top,
+      animationCount: animations.length,
+      durations: animations.map(animation => animation.effect.getTiming().duration),
+      delays: animations.map(animation => animation.effect.getTiming().delay),
+      easings: animations.map(animation => animation.effect.getTiming().easing),
     };
   `);
   await sleep(3000);
@@ -183,12 +259,36 @@ try {
     return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)};
   `);
   const highlightBeforeMove = await selectionHighlightState();
+  await run(`
+    window.__folderTest.tabs[1].querySelector('.tab-background').style.background =
+      'rgba(255, 0, 0, 0.05)';
+  `);
   await send('WebDriver:PerformActions', { actions: [{ type: 'pointer', id: 'mouse', parameters: { pointerType: 'mouse' }, actions: [
     {type:'pointerMove',duration:0,origin:'viewport', ...clickPoint}, {type:'pointerDown',button:0}, {type:'pointerUp',button:0},
   ] }] });
-  await sleep(100);
+  await run(`
+    window.__folderTest.tabs[1].querySelector('.tab-background').style.removeProperty('background');
+  `);
+  await sleep(35);
+  const pageDepthDuringSelection = await pageDepthState();
+  assert.equal(pageDepthDuringSelection.duration, 160, 'Selected page uses a short depth transition');
+  assert.equal(pageDepthDuringSelection.easing, 'cubic-bezier(0.2, 0, 0, 1)');
+  assert.deepEqual(pageDepthDuringSelection.keyframes, [
+    { offset: 0, scale: 0.985 },
+    { offset: 1, scale: 1 },
+  ]);
+  assert(
+    pageDepthDuringSelection.scale > 0.985 && pageDepthDuringSelection.scale < 1,
+    'Selected page moves forward from a slightly recessed scale'
+  );
+  await sleep(65);
   const highlightDuringMove = await selectionHighlightState();
   assert(highlightDuringMove.targetMarked, 'Selected tab delegates its background to the shared highlight');
+  assert.equal(
+    highlightDuringMove.highlightBackground,
+    highlightBeforeMove.highlightBackground,
+    'Hovered selection cannot replace the selected highlight with a transient hover appearance'
+  );
   assert.equal(highlightDuringMove.animationDuration, 360);
   assert.deepEqual(highlightDuringMove.animationKeyframes.map(frame => frame.offset), [0, 0.68, 0.86, 1]);
   const motionDirection = Math.sign(highlightDuringMove.selectedTop - highlightBeforeMove.top);
@@ -215,7 +315,133 @@ try {
   assert(result[0].outlined, 'Previously selected tab gains an outline');
   const highlightAfterMove = await selectionHighlightState();
   assert(Math.abs(highlightAfterMove.top - highlightAfterMove.selectedTop) < 0.5, 'Selected highlight finishes on the new tab');
+  assert.equal((await pageDepthState()).scale, 1, 'Selected page finishes at its natural scale');
+  console.log('PASS: selected page gains depth without fading or delaying tab display');
   console.log('PASS: actual mouse selection and outline transfer');
+
+  await run(`
+    const anchorTab = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      skipAnimation: true,
+    });
+    const tab = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      skipAnimation: true,
+    });
+    const followingTab = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      skipAnimation: true,
+    });
+    anchorTab.setAttribute('label', 'Close test anchor');
+    tab.setAttribute('label', 'Particle close');
+    followingTab.setAttribute('label', 'Following tab');
+    gBrowser.moveTabTo(tab, anchorTab._tPos + 1);
+    gBrowser.moveTabTo(followingTab, tab._tPos + 1);
+    gBrowser.selectedTab = anchorTab;
+    window.__closeParticleTest = { anchorTab, tab, followingTab };
+  `);
+  await sleep(450);
+  const closeLayoutBefore = await run(`
+    const {tab, followingTab} = window.__closeParticleTest;
+    return {
+      tabHeight: tab.getBoundingClientRect().height,
+      followingTop: followingTab.getBoundingClientRect().top,
+    };
+  `);
+  const closeParticlePoint = await run(`
+    const tab = window.__closeParticleTest.tab;
+    const button = tab.querySelector('.tab-close-button');
+    const box = button?.getBoundingClientRect();
+    const tabBox = tab.getBoundingClientRect();
+    return box?.width > 0
+      ? {x:Math.round(box.x+box.width/2),y:Math.round(box.y+box.height/2)}
+      : {x:Math.round(tabBox.right-12),y:Math.round(tabBox.y+tabBox.height/2)};
+  `);
+  await send('WebDriver:PerformActions', { actions: [{ type: 'pointer', id: 'particle-close-mouse', parameters: { pointerType: 'mouse' }, actions: [
+    {type:'pointerMove',duration:0,origin:'viewport', ...closeParticlePoint}, {type:'pointerDown',button:0}, {type:'pointerUp',button:0},
+  ] }] });
+  await sleep(45);
+  const closeParticleDuringClose = await closeParticleState();
+  console.log(JSON.stringify({closeParticleRenderer:closeParticleDuringClose.renderer}));
+  assert.equal(closeParticleDuringClose.effectCount, 1, 'Ungrouped tab close creates one particle overlay');
+  assert.equal(closeParticleDuringClose.renderer, 'particles-only');
+  assert.equal(closeParticleDuringClose.ghostCount, 0, 'Closed tab ghost is never reconstructed');
+  assert.equal(closeParticleDuringClose.closedTabVisibility, 'hidden', 'Closing tab stays hidden');
+  assert.equal(closeParticleDuringClose.particleCount, 60, 'Close effect uses 60 particles');
+  assert.equal(closeParticleDuringClose.particleDurations.length, 60);
+  assert(
+    closeParticleDuringClose.particleDurations.every(duration => duration >= 385 && duration <= 455),
+    'Particles use short varied durations'
+  );
+  assert(
+    closeParticleDuringClose.particleDelays.every(delay => delay >= 0 && delay <= 68),
+    'Particles use a restrained upward dissolve wave'
+  );
+  assert(
+    closeParticleDuringClose.finalTranslateY.every(translateY => translateY <= -7),
+    'Every particle moves upward'
+  );
+  const closeLayoutHeld = await run(
+    'return window.__closeParticleTest.followingTab.getBoundingClientRect().top;'
+  );
+  assert(
+    Math.abs(closeLayoutHeld - closeLayoutBefore.followingTop) < 2,
+    'Following tabs stay in place during the close hold'
+  );
+  const closeLayoutSamples = [];
+  for (let index = 0; index < 20; index += 1) {
+    await sleep(25);
+    closeLayoutSamples.push({
+      elapsed: 70 + index * 25,
+      ...(await closeLayoutState()),
+    });
+  }
+  const movedSamples = closeLayoutSamples.filter(
+    sample => sample.top < closeLayoutBefore.followingTop - 0.75
+  );
+  assert(movedSamples.length > 0, 'Following tabs eventually move upward');
+  assert(movedSamples[0].elapsed >= 120, 'Following tabs wait before moving upward');
+  assert(
+    closeLayoutSamples.every(
+      (sample, index) => index === 0 || sample.top <= closeLayoutSamples[index - 1].top + 0.75
+    ),
+    'Following tabs move upward without reversing'
+  );
+  const observedLayoutState = closeLayoutSamples.find(
+    sample => sample.animationCount > 0
+  );
+  assert(observedLayoutState, 'Delayed close layout animation is observed');
+  assert(observedLayoutState.durations.every(duration => duration === 160));
+  assert(observedLayoutState.delays.every(delay => delay === 90));
+  assert(
+    observedLayoutState.easings.every(
+      easing => easing === 'cubic-bezier(0.4, 0, 0.2, 1)'
+    )
+  );
+  assert(
+    closeLayoutSamples.at(-1).top < closeLayoutBefore.followingTop - closeLayoutBefore.tabHeight / 2,
+    'Following tabs finish near the compacted position'
+  );
+  const closeParticleAfterNativeClose = await closeParticleState();
+  assert.equal(closeParticleAfterNativeClose.effectCount, 0, 'Close particle overlay finishes cleanly');
+
+  await run(`
+    const tab = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      skipAnimation: true,
+    });
+    const folder = gZenFolders.createFolder([tab], { label: 'No close particles inside folder' });
+    window.__folderCloseParticleTest = { tab, folder };
+  `);
+  await sleep(150);
+  await run('gBrowser.removeTab(window.__folderCloseParticleTest.tab, { animate: false });');
+  await sleep(45);
+  assert.equal(
+    (await closeParticleState()).effectCount,
+    0,
+    'Folder tab close does not create close particles'
+  );
+  console.log('PASS: ungrouped tabs dissolve upward while following tabs compact after a short delay');
 
   await run('window.__folderTest.folder.collapsed=false;');
   await sleep(500);
@@ -279,6 +505,121 @@ try {
     'Selected highlight finishes on the moved tab'
   );
   console.log('PASS: selected highlight tracks folder layout motion');
+
+  await run(`
+    const principal = Services.scriptSecurityManager.getSystemPrincipal();
+    const outside = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    });
+    const first = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    });
+    const last = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    });
+    outside.setAttribute('label', 'Folder fallback');
+    first.setAttribute('label', 'Folder closing first');
+    last.setAttribute('label', 'Folder closing last');
+    const folder = gZenFolders.createFolder([first, last], { label: 'Empty selection folder' });
+    folder.collapsed = false;
+    first.owner = outside;
+    last.owner = outside;
+    gBrowser.selectedTab = last;
+    window.__emptyFolderSelectionTest = { outside, first, last, folder };
+  `);
+  await sleep(350);
+  await run(`
+    const {outside, first, last} = window.__emptyFolderSelectionTest;
+    const fallbackBackground = outside.querySelector(':scope > .tab-stack > .tab-background');
+    fallbackBackground.style.setProperty('display', 'none');
+    setTimeout(() => fallbackBackground.style.removeProperty('display'), 80);
+    gBrowser.removeTabs([first, last]);
+  `);
+  let fallbackMotion;
+  for (let index = 0; index < 12; index += 1) {
+    await sleep(25);
+    fallbackMotion = await run(`
+      const highlight = document.getElementById('folder-open-tabs-selection-highlight');
+      const animation = highlight?.getAnimations()[0];
+      const firstTransform = animation?.effect.getKeyframes()[0]?.transform;
+      const firstMatrix = firstTransform ? new DOMMatrixReadOnly(firstTransform) : null;
+      return {
+        selectedIsOutside: gBrowser.selectedTab === window.__emptyFolderSelectionTest.outside,
+        duration: animation?.effect.getTiming().duration,
+        firstMotion: firstMatrix
+          ? Math.abs(firstMatrix.e) + Math.abs(firstMatrix.f) + Math.abs(firstMatrix.a - 1) + Math.abs(firstMatrix.d - 1)
+          : 0,
+      };
+    `);
+    if (fallbackMotion.selectedIsOutside && fallbackMotion.duration === 360) {
+      break;
+    }
+  }
+  assert.equal(fallbackMotion.selectedIsOutside, true, 'Normal fallback tab becomes selected');
+  assert.equal(fallbackMotion.duration, 360, 'Fallback highlight uses the selection motion');
+  assert(
+    fallbackMotion.firstMotion > 0.5,
+    'Fallback highlight starts from the closed folder tab position'
+  );
+  await sleep(450);
+  const emptyFolderSelection = await run(`
+    const selected = gBrowser.selectedTab;
+    const controller = window.__folderOpenTabsSelectionHighlightController;
+    const highlight = document.getElementById('folder-open-tabs-selection-highlight');
+    const selectedBox = selected?.querySelector(':scope > .tab-stack > .tab-background')?.getBoundingClientRect();
+    const highlightBox = highlight?.getBoundingClientRect();
+    return {
+      selectedIsOutside: selected === window.__emptyFolderSelectionTest.outside,
+      selectedInsideFolder: !!selected?.closest('zen-folder'),
+      currentMatchesSelected: controller?.currentTab === selected,
+      highlightHidden: !!highlight?.hidden,
+      selectedMarked: selected?.hasAttribute('folder-open-tabs-selection-target'),
+      topDifference: Math.abs((highlightBox?.top ?? 0) - (selectedBox?.top ?? 0)),
+    };
+  `);
+  assert.equal(emptyFolderSelection.selectedIsOutside, true, 'Normal fallback tab stays selected');
+  assert.equal(emptyFolderSelection.selectedInsideFolder, false, 'Selection leaves the emptied folder');
+  assert.equal(emptyFolderSelection.currentMatchesSelected, true, 'Highlight retargets to the fallback tab');
+  assert.equal(emptyFolderSelection.highlightHidden, false, 'Fallback highlight stays visible');
+  assert.equal(emptyFolderSelection.selectedMarked, true, 'Fallback tab owns the shared highlight');
+  assert(emptyFolderSelection.topDifference < 0.75, 'Fallback highlight reaches the selected tab');
+  await run(`
+    const controller = window.__folderOpenTabsSelectionHighlightController;
+    controller.hide();
+    gBrowser.selectedTab.style.setProperty('--folder-open-tabs-selection-probe', '1');
+  `);
+  await sleep(100);
+  const recoveredEmptyFolderSelection = await selectionHighlightState();
+  assert.equal(recoveredEmptyFolderSelection.targetMarked, true, 'Layout reconciliation restores the selected target');
+  assert(
+    Math.abs(recoveredEmptyFolderSelection.top - recoveredEmptyFolderSelection.selectedTop) < 0.75,
+    'Layout reconciliation restores the selected highlight position'
+  );
+  await run(`
+    gBrowser.selectedTab.style.removeProperty('--folder-open-tabs-selection-probe');
+  `);
+  const fallbackClickPoint = await run(`
+    const tab = gBrowser.selectedTab;
+    const box = tab.getBoundingClientRect();
+    window.__fallbackTabClickCount = 0;
+    tab.addEventListener('click', () => window.__fallbackTabClickCount += 1, { once: true });
+    return {x:Math.round(box.x+box.width/2),y:Math.round(box.y+box.height/2)};
+  `);
+  await send('WebDriver:PerformActions', { actions: [{ type: 'pointer', id: 'fallback-tab-mouse', parameters: { pointerType: 'mouse' }, actions: [
+    {type:'pointerMove',duration:0,origin:'viewport', ...fallbackClickPoint}, {type:'pointerDown',button:0}, {type:'pointerUp',button:0},
+  ] }] });
+  assert.equal(
+    await run('return window.__fallbackTabClickCount;'),
+    1,
+    'Fallback tab remains clickable after highlight recovery'
+  );
+  console.log('PASS: empty folder selection retargets the highlight');
 
   await run('gBrowser.selectedTab=window.__folderTest.tabs[1];');
   await sleep(300);

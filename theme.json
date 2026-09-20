@@ -1,11 +1,11 @@
 {
   "id": "folder-open-tabs",
   "name": "Folder Open Tabs",
-  "description": "閉じたフォルダーのロード済みタブを表示し、選択背景を滑らかに移動します。",
+  "description": "閉じたフォルダーのロード済みタブを表示し、選択・ページ切替・通常タブの粒子終了を滑らかにします。",
   "author": "個人用Mod",
-  "version": "0.2.3",
+  "version": "0.4.6",
   "createdAt": "2026-09-20",
-  "updatedAt": "2026-09-20",
+  "updatedAt": "2026-09-21",
   "tags": [
     "Tabs",
     "Folders",
