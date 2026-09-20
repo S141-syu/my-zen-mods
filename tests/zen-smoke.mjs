@@ -18,6 +18,7 @@ const port = await new Promise((resolve, reject) => {
 await mkdir(path.join(profile, 'chrome'));
 await writeFile(path.join(profile, 'chrome', 'folder-open-tabs.css'), await readFile(path.join(root, 'chrome.css')));
 await writeFile(path.join(profile, 'chrome', 'userChrome.css'), await readFile(path.join(root, 'chrome', 'userChrome.css')));
+const selectionMotionScript = await readFile(path.join(root, 'folder-open-tabs.uc.mjs'), 'utf8');
 await writeFile(path.join(profile, 'user.js'), [
   `user_pref("marionette.port", ${port});`,
   'user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);',
@@ -88,8 +89,33 @@ try {
         background:bg.backgroundColor, internalVisible:t.visible, ariaHidden:t.getAttribute('aria-hidden') };
     });
   `);
+  const selectionHighlightState = () => run(`
+    const highlight = document.getElementById('folder-open-tabs-selection-highlight');
+    const selected = document.querySelector('#tabbrowser-tabs .tabbrowser-tab[selected] > .tab-stack > .tab-background');
+    const highlightBox = highlight?.getBoundingClientRect();
+    const selectedBox = selected?.getBoundingClientRect();
+    const animation = highlight?.getAnimations()[0];
+    return {
+      top: highlightBox?.top,
+      left: highlightBox?.left,
+      width: highlightBox?.width,
+      height: highlightBox?.height,
+      selectedTop: selectedBox?.top,
+      selectedLeft: selectedBox?.left,
+      selectedWidth: selectedBox?.width,
+      selectedHeight: selectedBox?.height,
+      targetMarked: selected?.closest('.tabbrowser-tab')?.hasAttribute('folder-open-tabs-selection-target'),
+      animationDuration: animation?.effect.getTiming().duration,
+      animationKeyframes: animation?.effect.getKeyframes().map(frame => ({
+        offset: frame.computedOffset,
+        top: frame.top,
+        easing: frame.easing,
+      })),
+    };
+  `);
   await sleep(3000);
   console.log(JSON.stringify(await run('return { version: Services.appinfo.version, folders: !!window.gZenFolders, workspaces: !!window.gZenWorkspaces, url: location.href };')));
+  await run(selectionMotionScript);
   console.log(JSON.stringify(await run(`
     const principal = Services.scriptSecurityManager.getSystemPrincipal();
     const tabs = ['Displayed', 'Loaded', 'Unloaded'].map(label => {
@@ -156,13 +182,38 @@ try {
     const b=window.__folderTest.tabs[1].getBoundingClientRect();
     return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)};
   `);
+  const highlightBeforeMove = await selectionHighlightState();
   await send('WebDriver:PerformActions', { actions: [{ type: 'pointer', id: 'mouse', parameters: { pointerType: 'mouse' }, actions: [
     {type:'pointerMove',duration:0,origin:'viewport', ...clickPoint}, {type:'pointerDown',button:0}, {type:'pointerUp',button:0},
   ] }] });
-  await sleep(500);
+  await sleep(100);
+  const highlightDuringMove = await selectionHighlightState();
+  assert(highlightDuringMove.targetMarked, 'Selected tab delegates its background to the shared highlight');
+  assert.equal(highlightDuringMove.animationDuration, 360);
+  assert.deepEqual(highlightDuringMove.animationKeyframes.map(frame => frame.offset), [0, 0.68, 0.86, 1]);
+  const motionDirection = Math.sign(highlightDuringMove.selectedTop - highlightBeforeMove.top);
+  const overshootTop = parseFloat(highlightDuringMove.animationKeyframes[1].top);
+  const reboundTop = parseFloat(highlightDuringMove.animationKeyframes[2].top);
+  const travelDistance = Math.abs(highlightDuringMove.selectedTop - highlightBeforeMove.top);
+  const overshootRatio = Math.abs(overshootTop - highlightDuringMove.selectedTop) / travelDistance;
+  const reboundRatio = Math.abs(reboundTop - highlightDuringMove.selectedTop) / travelDistance;
+  assert(
+    motionDirection * (overshootTop - highlightDuringMove.selectedTop) > 0,
+    'Spring keyframe moves slightly beyond the destination'
+  );
+  assert(overshootRatio > 0.035 && overshootRatio < 0.045, 'Spring overshoot stays near four percent');
+  assert(reboundRatio > 0.005 && reboundRatio < 0.01, 'Spring rebound stays below one percent');
+  assert(
+    highlightDuringMove.top > Math.min(highlightBeforeMove.top, highlightDuringMove.selectedTop) &&
+      highlightDuringMove.top < Math.max(highlightBeforeMove.top, highlightDuringMove.selectedTop),
+    'Selected highlight moves between tab rows during the ease-in-out transition'
+  );
+  await sleep(320);
   result = await state();
   assert(result[1].selected && !result[1].outlined, 'Mouse click selects the retained tab');
   assert(result[0].outlined, 'Previously selected tab gains an outline');
+  const highlightAfterMove = await selectionHighlightState();
+  assert(Math.abs(highlightAfterMove.top - highlightAfterMove.selectedTop) < 0.5, 'Selected highlight finishes on the new tab');
   console.log('PASS: actual mouse selection and outline transfer');
 
   await run('window.__folderTest.folder.collapsed=false;');

@@ -16,6 +16,24 @@
   corner-shape: round !important;
 }
 
+/* Sine's companion script moves this shared highlight between selected tabs. */
+#folder-open-tabs-selection-highlight {
+  position: fixed;
+  display: block;
+  box-sizing: border-box;
+  pointer-events: none;
+  contain: layout style paint;
+  will-change: top, left, width, height;
+}
+
+#folder-open-tabs-selection-highlight[hidden] {
+  display: none;
+}
+
+#tabbrowser-tabs[orient="vertical"] .tabbrowser-tab[selected][folder-open-tabs-selection-target] > .tab-stack > .tab-background {
+  opacity: 0 !important;
+}
+
 /* Keep close and unload hover targets rounded without turning them circular. */
 #tabbrowser-tabs[orient="vertical"] .tabbrowser-tab :is(.tab-close-button, .tab-reset-button),
 #tabbrowser-tabs[orient="vertical"] zen-folder > .tab-group-label-container > .tab-reset-button {
