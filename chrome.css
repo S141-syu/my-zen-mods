@@ -8,6 +8,18 @@
   --folder-open-tabs-toggle-easing: ease-in-out;
 }
 
+@property --folder-open-tabs-unloaded-height {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --folder-open-tabs-unloaded-opacity {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
 /* An inset outline does not change tab dimensions or the selected background. */
 #tabbrowser-tabs zen-folder .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing], [selected], [visuallyselected]) > .tab-stack > .tab-background {
   outline: 1.5px solid color-mix(in srgb, currentColor 56%, transparent) !important;
@@ -69,18 +81,6 @@
   font-size: 13px !important;
 }
 
-@keyframes folder-open-tabs-collapse-unloaded {
-  from {
-    max-height: calc(var(--tab-min-height) + 2 * var(--tab-margin-block));
-    opacity: 1;
-  }
-
-  to {
-    max-height: 0;
-    opacity: 0;
-  }
-}
-
 /* Keep Zen's hidden container in layout so loaded tabs remain visible. */
 #tabbrowser-tabs zen-folder[collapsed] .tab-group-container {
   display: flex !important;
@@ -90,8 +90,13 @@
   opacity: 1 !important;
 }
 
-/* Never let Zen's negative spacer move retained loaded tabs out of view. */
-#tabbrowser-tabs zen-folder[collapsed] .zen-tab-group-start {
+/*
+ * Zen's negative spacer hides the whole collapsed folder. Disable it for the
+ * complete collapsed-to-expanded transition whenever the folder contains a
+ * loaded tab. Restricting this rule to [collapsed] makes the spacer reappear
+ * on the first expansion frame and briefly clips retained loaded tabs.
+ */
+#tabbrowser-tabs zen-folder:has(.tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing])) > .tab-group-container > .zen-tab-group-start {
   display: none !important;
   margin-top: 0 !important;
 }
@@ -110,12 +115,34 @@
   display: none !important;
 }
 
-/* Collapse only unloaded tabs; this also handles tabs unloaded while closed. */
-#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
+/*
+ * Animate unloaded tabs in both directions. Keeping the expanded rule active
+ * prevents their height from jumping to its final value before Zen starts its
+ * expand animation, while loaded tabs remain untouched and continuously shown.
+ */
+#tabbrowser-tabs zen-folder .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
+  --folder-open-tabs-unloaded-height: calc(var(--tab-min-height) + 2 * var(--tab-margin-block));
+  --folder-open-tabs-unloaded-opacity: 1;
   display: flex !important;
+  height: var(--folder-open-tabs-unloaded-height) !important;
   min-height: 0 !important;
+  max-height: var(--folder-open-tabs-unloaded-height) !important;
   overflow: hidden !important;
-  animation: folder-open-tabs-collapse-unloaded var(--folder-open-tabs-toggle-duration) var(--folder-open-tabs-toggle-easing) both !important;
+  opacity: var(--folder-open-tabs-unloaded-opacity) !important;
+  transition-property: --folder-open-tabs-unloaded-height, --folder-open-tabs-unloaded-opacity !important;
+  transition-duration: var(--folder-open-tabs-toggle-duration) !important;
+  transition-timing-function: var(--folder-open-tabs-toggle-easing) !important;
+}
+
+#tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
+  --folder-open-tabs-unloaded-height: 0px;
+  --folder-open-tabs-unloaded-opacity: 0;
+}
+
+/* Give collapse transitions a rendered start frame before Zen applies WAAPI. */
+#tabbrowser-tabs zen-folder[collapsed][folder-open-tabs-collapse-start] .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
+  --folder-open-tabs-unloaded-height: calc(var(--tab-min-height) + 2 * var(--tab-margin-block));
+  --folder-open-tabs-unloaded-opacity: 1;
 }
 
 /*
@@ -135,7 +162,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
-    animation-duration: 0s !important;
+  #tabbrowser-tabs zen-folder .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
+    transition-duration: 0s !important;
   }
 }

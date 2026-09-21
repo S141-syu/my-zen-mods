@@ -274,8 +274,11 @@ try {
     'Loaded background tab remains visible during collapse'
   );
   assert(
-    closing[2].height < expandedBeforeClosing[2].height || closing[2].opacity < 0.99,
-    'Unloaded tab participates in the closing animation'
+    closing[2].height > 0 &&
+      closing[2].height < expandedBeforeClosing[2].height &&
+      closing[2].opacity > 0 &&
+      closing[2].opacity < 1,
+    'Unloaded tab remains in an intermediate state during selected-folder collapse'
   );
   await sleep(500);
   let result = await state();
@@ -516,12 +519,22 @@ try {
     const unloadedAbove = gBrowser.addTab('about:blank', { triggeringPrincipal: principal, skipAnimation: true });
     const selectedBelow = gBrowser.addTab('about:blank', { triggeringPrincipal: principal, skipAnimation: true });
     const folder = gZenFolders.createFolder([unloadedAbove, selectedBelow], { label: 'Moving selection' });
+    const trailing = gBrowser.addTab('about:blank', { triggeringPrincipal: principal, skipAnimation: true });
     gBrowser.selectedTab = selectedBelow;
     gBrowser.discardBrowser(unloadedAbove, true);
-    window.__layoutMotionTest = { unloadedAbove, selectedBelow, folder };
+    window.__layoutMotionTest = { unloadedAbove, selectedBelow, folder, trailing };
   `);
   await sleep(500);
   const expandedLayout = await selectionHighlightState();
+  const expandedFollowers = await run(`
+    const newTabButton = document.getElementById('tabs-newtab-button') ?? document.getElementById('new-tab-button');
+    const newTabRect = newTabButton?.getBoundingClientRect();
+    return {
+      trailingTop: window.__layoutMotionTest.trailing.getBoundingClientRect().top,
+      newTabTop: newTabRect?.top,
+      newTabHeight: newTabRect?.height ?? 0,
+    };
+  `);
   await run('window.__layoutMotionTest.folder.collapsed=true;');
   await sleep(70);
   const closingLayout = await selectionHighlightState();
@@ -532,14 +545,40 @@ try {
   );
   await sleep(500);
   const collapsedLayout = await selectionHighlightState();
+  const collapsedFollowers = await run(`
+    const newTabButton = document.getElementById('tabs-newtab-button') ?? document.getElementById('new-tab-button');
+    return {
+      trailingTop: window.__layoutMotionTest.trailing.getBoundingClientRect().top,
+      newTabTop: newTabButton?.getBoundingClientRect().top,
+    };
+  `);
   await run('window.__layoutMotionTest.folder.collapsed=false;');
   await sleep(70);
   const openingLayout = await selectionHighlightState();
+  const openingFollowers = await run(`
+    const newTabButton = document.getElementById('tabs-newtab-button') ?? document.getElementById('new-tab-button');
+    return {
+      trailingTop: window.__layoutMotionTest.trailing.getBoundingClientRect().top,
+      newTabTop: newTabButton?.getBoundingClientRect().top,
+    };
+  `);
   assert(openingLayout.selectedTop > collapsedLayout.selectedTop, 'Selected tab moves downward while its folder opens');
   assert(
     Math.abs(openingLayout.top - openingLayout.selectedTop) < 0.75,
     'Selected highlight follows the tab during folder expansion'
   );
+  assert(
+    openingFollowers.trailingTop > collapsedFollowers.trailingTop + 0.5 &&
+      openingFollowers.trailingTop < expandedFollowers.trailingTop - 0.5,
+    'Normal tabs after a folder move continuously during expansion'
+  );
+  if (expandedFollowers.newTabHeight > 0) {
+    assert(
+      openingFollowers.newTabTop > collapsedFollowers.newTabTop + 0.5 &&
+        openingFollowers.newTabTop < expandedFollowers.newTabTop - 0.5,
+      'New tab button moves continuously during folder expansion'
+    );
+  }
   await sleep(500);
   const expandedAgainLayout = await selectionHighlightState();
   assert(
@@ -547,6 +586,217 @@ try {
     'Selected highlight finishes on the moved tab'
   );
   console.log('PASS: selected highlight tracks folder layout motion');
+
+  await run('window.resizeTo(900, 500);');
+  await sleep(250);
+  await run(`
+    const principal = Services.scriptSecurityManager.getSystemPrincipal();
+    const fillers = Array.from({ length: 12 }, () => gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    }));
+    const tabs = Array.from({ length: 3 }, (_, index) => {
+      const tab = gBrowser.addTab('about:blank', {
+        triggeringPrincipal: principal,
+        skipAnimation: true,
+        inBackground: true,
+      });
+      tab.setAttribute('label', \`Short folder \${index + 1}\`);
+      return tab;
+    });
+    const folder = gZenFolders.createFolder(tabs, { label: 'Short folder' });
+    const outside = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+    });
+    outside.setAttribute('label', 'Selected outside short folder');
+    gBrowser.selectedTab = outside;
+    window.__shortFolderMotionTest = { fillers, tabs, folder, outside };
+  `);
+  await sleep(250);
+  await run(`
+    const { tabs, folder } = window.__shortFolderMotionTest;
+    gBrowser.discardBrowser(tabs[2], true);
+    folder.collapsed = true;
+  `);
+  await sleep(500);
+  const shortFolderMotionState = () => run(`
+    const { folder, outside, tabs } = window.__shortFolderMotionTest;
+    const newTabButton = document.getElementById('tabs-newtab-button') ?? document.getElementById('new-tab-button');
+    const scrollbox = gBrowser.tabContainer.arrowScrollbox?.scrollbox;
+    const groupStart = folder.groupStartElement;
+    return {
+      collapsed: folder.collapsed,
+      folderTop: folder.getBoundingClientRect().top,
+      outsideTop: outside.getBoundingClientRect().top,
+      newTabTop: newTabButton?.getBoundingClientRect().top,
+      scrollTop: scrollbox?.scrollTop,
+      overflowAnchor: scrollbox ? getComputedStyle(scrollbox).overflowAnchor : null,
+      groupStartDisplay: getComputedStyle(groupStart).display,
+      groupStartMarginTop: getComputedStyle(groupStart).marginTop,
+      loadedHeights: tabs.slice(0, 2).map(tab => tab.getBoundingClientRect().height),
+      followerMotionCount:
+        window.__folderOpenTabsSelectionHighlightController.folderFollowerMotions.size,
+    };
+  `);
+  const shortFolderCollapsed = await shortFolderMotionState();
+  await run('window.__shortFolderMotionTest.folder.collapsed = false;');
+  const shortFolderOpeningSamples = [];
+  for (let index = 0; index < 8; index += 1) {
+    await sleep(30);
+    shortFolderOpeningSamples.push(await shortFolderMotionState());
+  }
+  await sleep(160);
+  const shortFolderExpanded = await shortFolderMotionState();
+  assert(shortFolderCollapsed.scrollTop > 0, 'Short-folder test runs inside a scrolled tab list');
+  assert(
+    shortFolderOpeningSamples.some(sample => sample.followerMotionCount > 0),
+    'Folder expansion starts the height-based follower position controller'
+  );
+  assert(
+    shortFolderOpeningSamples.some(sample => sample.overflowAnchor === 'none'),
+    'Folder expansion temporarily disables scroll anchoring'
+  );
+  assert(
+    shortFolderOpeningSamples.every(sample =>
+      sample.groupStartDisplay === 'none' && sample.groupStartMarginTop === '0px'
+    ),
+    'Loaded-folder spacer stays disabled throughout expansion'
+  );
+  assert(
+    shortFolderOpeningSamples.every(sample =>
+      sample.loadedHeights.every(height => height > 0)
+    ),
+    'Loaded folder tabs remain visible on every expansion sample'
+  );
+  assert(
+    shortFolderOpeningSamples.some(sample =>
+      sample.outsideTop > shortFolderCollapsed.outsideTop + 0.5 &&
+      sample.outsideTop < shortFolderExpanded.outsideTop - 0.5
+    ),
+    'Selected normal tab follows a short folder during expansion'
+  );
+  console.log('PASS: loaded tabs remain visible while a normal tab follows folder expansion');
+  await run('window.resizeTo(1366, 768);');
+  await sleep(250);
+
+  await run(`
+    const principal = Services.scriptSecurityManager.getSystemPrincipal();
+    const outside = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    });
+    const loaded = Array.from({ length: 2 }, () => gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    }));
+    const unloaded = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    });
+    const folder = gZenFolders.createFolder([...loaded, unloaded], { label: 'Normal tab selected while closing' });
+    window.__normalSelectedFolderTest = { outside, loaded, unloaded, folder };
+  `);
+  await sleep(100);
+  await run(`
+    const { outside, unloaded, folder } = window.__normalSelectedFolderTest;
+    gBrowser.discardBrowser(unloaded, true);
+    gBrowser.selectedTab = outside;
+    folder.collapsed = true;
+  `);
+  await sleep(500);
+  const normalSelectedFolderState = await run(`
+    const { loaded, unloaded, folder } = window.__normalSelectedFolderTest;
+    const groupStart = folder.groupStartElement;
+    return {
+      loadedHeights: loaded.map(tab => tab.getBoundingClientRect().height),
+      loadedDisplays: loaded.map(tab => getComputedStyle(tab).display),
+      unloadedHeight: unloaded.getBoundingClientRect().height,
+      folderCollapsed: folder.collapsed,
+      groupStartDisplay: getComputedStyle(groupStart).display,
+      groupStartMarginTop: getComputedStyle(groupStart).marginTop,
+    };
+  `);
+  assert.equal(normalSelectedFolderState.folderCollapsed, true, 'Folder remains collapsed while a normal tab is selected');
+  assert(
+    normalSelectedFolderState.loadedHeights.every(height => height > 0),
+    'Loaded folder tabs stay visible when a normal tab is selected'
+  );
+  assert(
+    normalSelectedFolderState.loadedDisplays.every(display => display === 'flex'),
+    'Loaded folder tabs keep the retained display layout with a normal tab selected'
+  );
+  assert.equal(normalSelectedFolderState.unloadedHeight, 0, 'Unloaded folder tabs remain stored');
+  assert.equal(normalSelectedFolderState.groupStartDisplay, 'none', 'Loaded folder spacer is removed with a normal tab selected');
+  assert.equal(normalSelectedFolderState.groupStartMarginTop, '0px', 'Loaded folder spacer has no offset with a normal tab selected');
+  console.log('PASS: loaded folder tabs survive collapse with a normal tab selected');
+
+  await run(`
+    const principal = Services.scriptSecurityManager.getSystemPrincipal();
+    const outside = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    });
+    outside.setAttribute('label', 'Previous normal tab');
+    const displayed = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    });
+    const retained = Array.from({ length: 2 }, () => gBrowser.addTab('about:blank', {
+      triggeringPrincipal: principal,
+      skipAnimation: true,
+      inBackground: true,
+    }));
+    displayed.setAttribute('label', 'Displayed folder tab');
+    retained.forEach((tab, index) => tab.setAttribute('label', 'Retained folder tab ' + (index + 1)));
+    const folder = gZenFolders.createFolder([displayed, ...retained], { label: 'Close displayed folder tab' });
+    window.__closeDisplayedFolderTabTest = { outside, displayed, retained, folder };
+  `);
+  await sleep(100);
+  await run(`
+    const { outside, displayed, folder } = window.__closeDisplayedFolderTabTest;
+    displayed.owner = outside;
+    gBrowser.selectedTab = displayed;
+    folder.collapsed = true;
+  `);
+  await sleep(500);
+  await run('gBrowser.removeTab(window.__closeDisplayedFolderTabTest.displayed, { animate: false });');
+  await sleep(500);
+  const retainedAfterDisplayedClose = await run(`
+    const { outside, retained, folder } = window.__closeDisplayedFolderTabTest;
+    const groupStart = folder.groupStartElement;
+    const container = folder.groupContainer;
+    return {
+      selectedOutside: gBrowser.selectedTab === outside,
+      folderCollapsed: folder.collapsed,
+      retainedHeights: retained.map(tab => tab.getBoundingClientRect().height),
+      retainedDisplays: retained.map(tab => getComputedStyle(tab).display),
+      containerDisplay: getComputedStyle(container).display,
+      containerHidden: container.hasAttribute('hidden'),
+      groupStartDisplay: getComputedStyle(groupStart).display,
+      groupStartMarginTop: getComputedStyle(groupStart).marginTop,
+    };
+  `);
+  assert.equal(retainedAfterDisplayedClose.selectedOutside, true, 'Closing a displayed folder tab selects the previous normal tab');
+  assert.equal(retainedAfterDisplayedClose.folderCollapsed, true, 'Folder remains collapsed after its displayed tab closes');
+  assert(
+    retainedAfterDisplayedClose.retainedHeights.every(height => height > 0),
+    'Remaining loaded folder tabs stay visible after the displayed tab closes'
+  );
+  assert(
+    retainedAfterDisplayedClose.retainedDisplays.every(display => display === 'flex'),
+    'Remaining loaded folder tabs keep the retained display layout'
+  );
+  assert.equal(retainedAfterDisplayedClose.containerDisplay, 'flex', 'Collapsed folder container stays in layout');
+  assert.equal(retainedAfterDisplayedClose.groupStartDisplay, 'none', 'Closed displayed tab spacer is removed');
+  assert.equal(retainedAfterDisplayedClose.groupStartMarginTop, '0px', 'Closed displayed tab spacer no longer offsets retained tabs');
+  console.log('PASS: remaining folder tabs survive closing the displayed tab');
 
   await run(`
     const principal = Services.scriptSecurityManager.getSystemPrincipal();
