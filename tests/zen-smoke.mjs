@@ -99,6 +99,27 @@ try {
       keyframeEasings: animation.effect?.getKeyframes().map(frame => frame.easing),
     }));
   `);
+  const allUnloadedFolderMotionState = () => run(`
+    const folder = window.__allUnloadedFolderTimingTest.folder;
+    return folder.getAnimations({ subtree: true }).map(animation => ({
+      target: animation.effect?.target?.className ?? animation.effect?.target?.localName,
+      duration: animation.effect?.getTiming().duration,
+      easing: animation.effect?.getTiming().easing,
+      playState: animation.playState,
+    }));
+  `);
+  const allUnloadedFolderVisualState = () => run(`
+    const { folder, tabs } = window.__allUnloadedFolderTimingTest;
+    const folderBox = folder.getBoundingClientRect();
+    return {
+      folderHeight: folderBox.height,
+      tabHeights: tabs.map(tab => tab.getBoundingClientRect().height),
+      tabOpacities: tabs.map(tab => Number(getComputedStyle(tab).opacity)),
+      containerHidden: folder.groupContainer.hasAttribute('hidden'),
+      groupStartMarginTop: getComputedStyle(folder.groupStartElement).marginTop,
+      outsideTop: window.__allUnloadedFolderTimingTest.outside.getBoundingClientRect().top,
+    };
+  `);
   const selectionHighlightState = () => run(`
     const highlight = document.getElementById('folder-open-tabs-selection-highlight');
     const selected = document.querySelector('#tabbrowser-tabs .tabbrowser-tab[selected] > .tab-stack > .tab-background');
@@ -185,6 +206,27 @@ try {
       }),
     };
   `);
+  const controlBurstState = () => run(`
+    const effects = [...document.querySelectorAll('.folder-open-tabs-control-burst-effect')];
+    const effect = effects.at(-1);
+    const particles = effect
+      ? [...effect.querySelectorAll('.folder-open-tabs-control-burst-particle')]
+      : [];
+    const animations = particles.flatMap(particle => particle.getAnimations());
+    return {
+      effectCount: effects.length,
+      renderer: effect?.dataset.renderer,
+      particleCount: particles.length,
+      originX: Number.parseFloat(effect?.style.left ?? 'NaN'),
+      originY: Number.parseFloat(effect?.style.top ?? 'NaN'),
+      sizes: particles.map(particle => Number.parseFloat(particle.style.width)),
+      radii: particles.map(particle => particle.style.borderRadius),
+      durations: animations.map(animation => animation.effect.getTiming().duration),
+      activeCount: animations.filter(animation =>
+        animation.playState === 'running' || animation.playState === 'pending'
+      ).length,
+    };
+  `);
   const closeLayoutState = () => run(`
     const animations = [
       ...document.querySelectorAll('#tabbrowser-tabs .tabbrowser-tab, #tabbrowser-tabs zen-folder'),
@@ -197,6 +239,40 @@ try {
       durations: animations.map(animation => animation.effect.getTiming().duration),
       delays: animations.map(animation => animation.effect.getTiming().delay),
       easings: animations.map(animation => animation.effect.getTiming().easing),
+    };
+  `);
+  const folderReturnState = () => run(`
+    const effects = [...document.querySelectorAll('.folder-open-tabs-folder-return-effect')];
+    const effect = effects.at(-1);
+    const surface = effect?.querySelector('.folder-open-tabs-folder-return-surface');
+    const target = document.querySelector('.folder-open-tabs-folder-return-target');
+    const animation = effect?.getAnimations().find(
+      item => item.id === 'folder-open-tabs-folder-return'
+    );
+    const targetAnimation = target?.getAnimations().find(
+      item => item.id === 'folder-open-tabs-folder-return-target'
+    );
+    const finalTransform = animation?.effect.getKeyframes().at(-1).transform;
+    const finalMatrix = finalTransform ? new DOMMatrixReadOnly(finalTransform) : null;
+    return {
+      effectCount: effects.length,
+      targetCount: document.querySelectorAll('.folder-open-tabs-folder-return-target').length,
+      renderer: effect?.dataset.renderer,
+      folderId: effect?.dataset.folderId,
+      surfaceOutlineWidth: surface ? getComputedStyle(surface).outlineWidth : null,
+      label: effect?.querySelector('span:not(.folder-open-tabs-folder-return-surface)')?.textContent,
+      duration: animation?.effect.getTiming().duration,
+      easing: animation?.effect.getTiming().easing,
+      offsets: animation?.effect.getKeyframes().map(frame => frame.computedOffset),
+      finalTranslateX: finalMatrix?.m41,
+      finalTranslateY: finalMatrix?.m42,
+      finalScaleX: finalMatrix?.m11,
+      finalScaleY: finalMatrix?.m22,
+      targetDuration: targetAnimation?.effect.getTiming().duration,
+      particleEffectCount: document.querySelectorAll('.folder-open-tabs-close-particle-effect').length,
+      openUnloadEffectCount: document.querySelectorAll('.folder-open-tabs-open-unload-effect').length,
+      controlBurstEffectCount: document.querySelectorAll('.folder-open-tabs-control-burst-effect').length,
+      controlBurstParticleCount: document.querySelectorAll('.folder-open-tabs-control-burst-particle').length,
     };
   `);
   await sleep(3000);
@@ -298,6 +374,95 @@ try {
   console.log('PASS: collapsed selection / loaded / unloaded presentation');
   const screenshot = await send('WebDriver:TakeScreenshot', { full: true });
   await writeFile(path.join(root, 'tests', 'zen-smoke.png'), Buffer.from(screenshot.value, 'base64'));
+
+  await run(`
+    const principal = Services.scriptSecurityManager.getSystemPrincipal();
+    const outside = gBrowser.addTab('about:blank', { triggeringPrincipal: principal, skipAnimation: true });
+    const tabs = Array.from({ length: 3 }, () =>
+      gBrowser.addTab('about:blank', { triggeringPrincipal: principal, skipAnimation: true })
+    );
+    const folder = gZenFolders.createFolder(tabs, { label: 'All unloaded timing' });
+    gBrowser.selectedTab = outside;
+    tabs.forEach(tab => gBrowser.discardBrowser(tab, true));
+    window.__allUnloadedFolderTimingTest = { outside, tabs, folder };
+  `);
+  await sleep(300);
+  const allUnloadedExpandedStart = await allUnloadedFolderVisualState();
+  const allUnloadedFolderClickPoint = await run(`
+    const box = window.__allUnloadedFolderTimingTest.folder
+      .querySelector('.tab-group-label-container')
+      .getBoundingClientRect();
+    return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) };
+  `);
+  const clickAllUnloadedFolder = pointerId => send('WebDriver:PerformActions', { actions: [{
+    type: 'pointer',
+    id: pointerId,
+    parameters: { pointerType: 'mouse' },
+    actions: [
+      { type: 'pointerMove', duration: 0, origin: 'viewport', ...allUnloadedFolderClickPoint },
+      { type: 'pointerDown', button: 0 },
+      { type: 'pointerUp', button: 0 },
+    ],
+  }] });
+  await clickAllUnloadedFolder('all-unloaded-collapse-mouse');
+  const allUnloadedCollapseSamples = [];
+  for (const delay of [40, 120, 200, 260, 320]) {
+    await sleep(delay - (allUnloadedCollapseSamples.at(-1)?.delay ?? 0));
+    allUnloadedCollapseSamples.push({
+      delay,
+      visual: await allUnloadedFolderVisualState(),
+      motion: await allUnloadedFolderMotionState(),
+    });
+  }
+  const allUnloadedCollapseMid = allUnloadedCollapseSamples.find(sample => sample.delay === 120);
+  const allUnloadedCollapsedEnd = allUnloadedCollapseSamples.at(-1);
+  assert(
+    allUnloadedCollapseSamples
+      .filter(sample => sample.motion.length)
+      .every(sample => sample.motion.every(animation => animation.duration === 280)),
+    'Mouse collapse with no loaded tabs keeps every folder animation at 280ms'
+  );
+  assert(
+    allUnloadedCollapseMid.visual.outsideTop < allUnloadedExpandedStart.outsideTop - 0.5 &&
+      allUnloadedCollapseMid.visual.outsideTop > allUnloadedCollapsedEnd.visual.outsideTop + 0.5,
+    'Following tabs remain between their endpoints halfway through an all-unloaded collapse'
+  );
+  await sleep(80);
+  await clickAllUnloadedFolder('all-unloaded-expand-mouse');
+  const allUnloadedExpandSamples = [];
+  for (const delay of [40, 120, 200, 260, 320]) {
+    await sleep(delay - (allUnloadedExpandSamples.at(-1)?.delay ?? 0));
+    allUnloadedExpandSamples.push({
+      delay,
+      visual: await allUnloadedFolderVisualState(),
+      motion: await allUnloadedFolderMotionState(),
+    });
+  }
+  const allUnloadedExpandMid = allUnloadedExpandSamples.find(sample => sample.delay === 120);
+  const allUnloadedExpandedEnd = allUnloadedExpandSamples.at(-1);
+  assert.equal(
+    allUnloadedCollapsedEnd.visual.groupStartMarginTop,
+    '-4px',
+    'All-unloaded collapse leaves the four-pixel spacer endpoint'
+  );
+  assert(
+    allUnloadedExpandSamples[0].visual.outsideTop > allUnloadedCollapsedEnd.visual.outsideTop + 0.5 &&
+      allUnloadedExpandSamples[0].visual.outsideTop < allUnloadedExpandedStart.outsideTop - 0.5,
+    'All-unloaded expansion starts moving during the first sample'
+  );
+  assert(
+    allUnloadedExpandSamples
+      .filter(sample => sample.motion.length)
+      .every(sample => sample.motion.every(animation => animation.duration === 280)),
+    'Mouse expansion with no loaded tabs keeps every folder animation at 280ms'
+  );
+  assert(
+    allUnloadedExpandMid.visual.outsideTop > allUnloadedCollapsedEnd.visual.outsideTop + 0.5 &&
+      allUnloadedExpandMid.visual.outsideTop < allUnloadedExpandedEnd.visual.outsideTop - 0.5,
+    'Following tabs remain between their endpoints halfway through an all-unloaded expansion'
+  );
+  await sleep(80);
+  console.log('PASS: all-unloaded folder clicks keep the same continuous 280ms layout motion');
 
   const clickPoint = await run(`
     const b=window.__folderTest.tabs[1].getBoundingClientRect();
@@ -406,6 +571,16 @@ try {
     {type:'pointerMove',duration:0,origin:'viewport', ...closeParticlePoint}, {type:'pointerDown',button:0}, {type:'pointerUp',button:0},
   ] }] });
   await sleep(45);
+  const closeControlBurst = await controlBurstState();
+  assert.equal(closeControlBurst.effectCount, 1, 'Close-button click creates one control burst');
+  assert.equal(closeControlBurst.renderer, 'control-burst');
+  assert.equal(closeControlBurst.particleCount, 8, 'Control burst uses eight restrained squares');
+  assert.equal(closeControlBurst.activeCount, 8);
+  assert(closeControlBurst.sizes.every(size => size >= 2 && size <= 3));
+  assert(closeControlBurst.radii.every(radius => radius === '0px'));
+  assert(closeControlBurst.durations.every(duration => duration >= 260 && duration <= 288));
+  assert(Math.abs(closeControlBurst.originX - closeParticlePoint.x) < 0.5);
+  assert(Math.abs(closeControlBurst.originY - closeParticlePoint.y) < 0.5);
   const closeParticleDuringClose = await closeParticleState();
   console.log(JSON.stringify({closeParticleRenderer:closeParticleDuringClose.renderer}));
   assert.equal(closeParticleDuringClose.effectCount, 1, 'Ungrouped tab close creates one particle overlay');
@@ -471,22 +646,257 @@ try {
   assert.equal(closeParticleAfterNativeClose.effectCount, 0, 'Close particle overlay finishes cleanly');
 
   await run(`
-    const tab = gBrowser.addTab('about:blank', {
+    const returningTab = gBrowser.addTab('about:blank', {
       triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
       skipAnimation: true,
     });
-    const folder = gZenFolders.createFolder([tab], { label: 'No close particles inside folder' });
-    window.__folderCloseParticleTest = { tab, folder };
+    const retainedTab = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      skipAnimation: true,
+    });
+    const storedTab = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      skipAnimation: true,
+    });
+    returningTab.setAttribute('label', 'Return to folder');
+    retainedTab.setAttribute('label', 'Remain in folder');
+    storedTab.setAttribute('label', 'Stored in folder');
+    returningTab.querySelector('.tab-label').textContent = 'Returning tab';
+    retainedTab.querySelector('.tab-label').textContent = 'Retained tab';
+    const folder = gZenFolders.createFolder(
+      [returningTab, retainedTab, storedTab],
+      { label: 'Folder return target' }
+    );
+    gBrowser.selectedTab = window.__closeParticleTest.anchorTab;
+    window.__folderCloseReturnTest = { returningTab, retainedTab, storedTab, folder };
   `);
   await sleep(150);
-  await run('gBrowser.removeTab(window.__folderCloseParticleTest.tab, { animate: false });');
+  await run(`
+    const { storedTab, folder } = window.__folderCloseReturnTest;
+    gBrowser.discardBrowser(storedTab, true);
+    folder.collapsed = true;
+  `);
+  await sleep(500);
+  const folderReturnGeometry = await run(`
+    const { returningTab, folder } = window.__folderCloseReturnTest;
+    const origin = returningTab.getBoundingClientRect();
+    const label = folder.querySelector(':scope > .tab-group-label-container');
+    const icon = label.querySelector('.tab-group-folder-icon');
+    const iconBox = icon.getBoundingClientRect();
+    const labelBox = label.getBoundingClientRect();
+    const target = iconBox.width > 0 && iconBox.height > 0 ? iconBox : labelBox;
+    return {
+      translateX: target.left + target.width / 2 - (origin.left + origin.width / 2),
+      translateY: target.top + target.height / 2 - (origin.top + origin.height / 2),
+      folderId: folder.id,
+      label: returningTab.querySelector('.tab-label')?.textContent,
+    };
+  `);
+  const folderReturnClosePoint = await run(`
+    const tab = window.__folderCloseReturnTest.returningTab;
+    const button = tab.querySelector('.tab-close-button');
+    const buttonBox = button?.getBoundingClientRect();
+    const tabBox = tab.getBoundingClientRect();
+    return buttonBox?.width > 0
+      ? {x:Math.round(buttonBox.x+buttonBox.width/2),y:Math.round(buttonBox.y+buttonBox.height/2)}
+      : {x:Math.round(tabBox.right-12),y:Math.round(tabBox.y+tabBox.height/2)};
+  `);
+  await send('WebDriver:PerformActions', { actions: [{
+    type: 'pointer',
+    id: 'folder-return-close-mouse',
+    parameters: { pointerType: 'mouse' },
+    actions: [
+      {type:'pointerMove',duration:0,origin:'viewport', ...folderReturnClosePoint},
+      {type:'pointerDown',button:0},
+      {type:'pointerUp',button:0},
+    ],
+  }] });
   await sleep(45);
+  const folderReturnUnloadState = await run(`
+    const { returningTab, folder } = window.__folderCloseReturnTest;
+    return {
+      connected: returningTab.isConnected,
+      pending: returningTab.hasAttribute('pending'),
+      collapsed: folder.collapsed,
+    };
+  `);
+  assert.deepEqual(
+    folderReturnUnloadState,
+    { connected: true, pending: true, collapsed: true },
+    'Collapsed folder close control unloads the tab without removing it'
+  );
+  const folderReturnDuringClose = await folderReturnState();
+  assert.equal(folderReturnDuringClose.effectCount, 1, 'Collapsed folder tab creates one return overlay');
+  assert.equal(folderReturnDuringClose.targetCount, 1, 'Folder icon creates one receiving pulse');
+  assert.equal(folderReturnDuringClose.renderer, 'folder-return');
+  assert.equal(folderReturnDuringClose.folderId, folderReturnGeometry.folderId);
+  assert.equal(folderReturnDuringClose.surfaceOutlineWidth, '1px', 'Return overlay preserves the loaded-tab outline');
   assert.equal(
-    (await closeParticleState()).effectCount,
-    0,
-    'Folder tab close does not create close particles'
+    folderReturnDuringClose.label,
+    folderReturnGeometry.label,
+    'Return overlay preserves the rendered tab label'
+  );
+  assert.equal(folderReturnDuringClose.duration, 560);
+  assert.equal(folderReturnDuringClose.targetDuration, 560);
+  assert.equal(folderReturnDuringClose.easing, 'linear');
+  assert.equal(folderReturnDuringClose.offsets.length, 35, 'Return motion uses near-frame curve samples');
+  assert.equal(folderReturnDuringClose.offsets[0], 0);
+  assert.equal(folderReturnDuringClose.offsets.at(-1), 1);
+  assert(
+    folderReturnDuringClose.offsets.every(
+      (offset, index, offsets) => index === 0 || offset > offsets[index - 1]
+    ),
+    'Return motion progresses without stepped keyframe holds'
+  );
+  assert(
+    Math.abs(folderReturnDuringClose.finalTranslateX - folderReturnGeometry.translateX) < 0.5 &&
+      Math.abs(folderReturnDuringClose.finalTranslateY - folderReturnGeometry.translateY) < 0.5,
+    'Closing tab converges on the folder icon'
+  );
+  assert(Math.abs(folderReturnDuringClose.finalScaleX - 0.12) < 0.001);
+  assert(Math.abs(folderReturnDuringClose.finalScaleY - 0.04) < 0.001);
+  assert.equal(folderReturnDuringClose.particleEffectCount, 0, 'Folder return does not create close particles');
+  assert.equal(folderReturnDuringClose.openUnloadEffectCount, 0, 'Collapsed folders do not use open-folder unload motion');
+  assert.equal(folderReturnDuringClose.controlBurstEffectCount, 1, 'Collapsed-folder unload button bursts at the click point');
+  assert.equal(folderReturnDuringClose.controlBurstParticleCount, 8);
+  await sleep(650);
+  const folderReturnAfterClose = await folderReturnState();
+  assert.equal(folderReturnAfterClose.effectCount, 0, 'Folder return overlay finishes cleanly');
+  assert.equal(folderReturnAfterClose.targetCount, 0, 'Folder receiving pulse finishes cleanly');
+  assert.equal(folderReturnAfterClose.controlBurstEffectCount, 0, 'Unload control burst finishes cleanly');
+  assert(
+    await run('return window.__folderCloseReturnTest.retainedTab.isConnected;'),
+    'Other folder tabs remain connected'
   );
   console.log('PASS: ungrouped tabs dissolve upward while following tabs compact after a short delay');
+  console.log('PASS: loaded tabs in collapsed folders fold back into the folder icon');
+
+  await run(`
+    const openReturningTab = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      skipAnimation: true,
+    });
+    const openRetainedTab = gBrowser.addTab('about:blank', {
+      triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
+      skipAnimation: true,
+    });
+    const folder = gZenFolders.createFolder(
+      [openReturningTab, openRetainedTab],
+      { label: 'Open folder unload' }
+    );
+    folder.collapsed = false;
+    gBrowser.selectedTab = openReturningTab;
+    window.__openFolderUnloadTest = { openReturningTab, openRetainedTab, folder };
+  `);
+  await sleep(400);
+  const openFolderUnloadPoint = await run(`
+    const tab = window.__openFolderUnloadTest.openReturningTab;
+    const box = tab.getBoundingClientRect();
+    return { x: Math.round(box.right - 12), y: Math.round(box.top + box.height / 2) };
+  `);
+  await send('WebDriver:PerformActions', { actions: [{
+    type: 'pointer',
+    id: 'open-folder-unload-hover',
+    parameters: { pointerType: 'mouse' },
+    actions: [
+      {type:'pointerMove',duration:0,origin:'viewport', ...openFolderUnloadPoint},
+    ],
+  }] });
+  await sleep(150);
+  const openFolderUnloadButtonPoint = await run(`
+    const tab = window.__openFolderUnloadTest.openReturningTab;
+    const controls = [...tab.querySelectorAll('.tab-reset-button, .tab-close-button')];
+    const control = controls.find(item => item.getBoundingClientRect().width > 0);
+    const box = control?.getBoundingClientRect() ?? tab.getBoundingClientRect();
+    return {
+      x: Math.round(control ? box.left + box.width / 2 : box.right - 12),
+      y: Math.round(box.top + box.height / 2),
+      className: control?.className ?? null,
+    };
+  `);
+  await send('WebDriver:PerformActions', { actions: [{
+    type: 'pointer',
+    id: 'open-folder-unload-mouse',
+    parameters: { pointerType: 'mouse' },
+    actions: [
+      {type:'pointerMove',duration:0,origin:'viewport',x:openFolderUnloadButtonPoint.x,y:openFolderUnloadButtonPoint.y},
+      {type:'pointerDown',button:0},
+      {type:'pointerUp',button:0},
+    ],
+  }] });
+  const openFolderUnloadSamples = [];
+  for (const delay of [0, 20, 40, 80, 140, 220, 300, 380, 460, 560]) {
+    if (delay) await sleep(delay - (openFolderUnloadSamples.at(-1)?.delay ?? 0));
+    openFolderUnloadSamples.push(await run(`
+      const { openReturningTab: tab, folder } = window.__openFolderUnloadTest;
+      const style = getComputedStyle(tab);
+      const box = tab.getBoundingClientRect();
+      const effect = document.querySelector('.folder-open-tabs-open-unload-effect');
+      const rings = [...(effect?.querySelectorAll('.folder-open-tabs-open-unload-ring') ?? [])];
+      const iconAnimations = [...tab.querySelectorAll('.tab-icon-image, .tab-throbber')]
+        .flatMap(icon => icon.getAnimations());
+      return {
+        height: box.height,
+        opacity: Number(style.opacity),
+        display: style.display,
+        pending: tab.hasAttribute('pending'),
+        folderActive: tab.hasAttribute('folder-active'),
+        inlineHeight: tab.style.height,
+        inlineOpacity: tab.style.opacity,
+        collapsed: folder.collapsed,
+        effectCount: document.querySelectorAll('.folder-open-tabs-open-unload-effect').length,
+        ringCount: rings.length,
+        ringAnimationCount: rings.flatMap(ring => ring.getAnimations()).length,
+        ringRadius: rings[0] ? getComputedStyle(rings[0]).borderRadius : null,
+        controlBurstEffectCount: document.querySelectorAll('.folder-open-tabs-control-burst-effect').length,
+        controlBurstParticleCount: document.querySelectorAll('.folder-open-tabs-control-burst-particle').length,
+        iconShake: iconAnimations.some(animation =>
+          animation.id === 'folder-open-tabs-open-unload-icon-shake' &&
+          (animation.playState === 'running' || animation.playState === 'pending')
+        ),
+      };
+    `).then(sample => ({ ...sample, delay })));
+  }
+  assert(
+    openFolderUnloadSamples.some(sample => sample.pending),
+    'Open-folder close control unloads the tab'
+  );
+  assert(
+    openFolderUnloadSamples.every(sample =>
+      sample.height >= 39.5 &&
+      sample.opacity === 1 &&
+      sample.display === 'flex' &&
+      sample.collapsed === false
+    ),
+    'Unloading a tab in an open folder never collapses or fades its row'
+  );
+  assert(
+    openFolderUnloadSamples.some(sample =>
+      sample.pending &&
+      sample.effectCount === 1 &&
+      sample.ringCount === 1 &&
+      sample.ringAnimationCount === 1 &&
+      sample.ringRadius === '999px'
+    ),
+    'Open-folder unload contracts one fully rounded ring toward the favicon'
+  );
+  assert(
+    openFolderUnloadSamples.some(sample => sample.effectCount === 0 && sample.iconShake),
+    'Favicon shakes after the outline is fully absorbed'
+  );
+  assert(
+    openFolderUnloadSamples.some(sample =>
+      sample.pending &&
+      sample.controlBurstEffectCount === 1 &&
+      sample.controlBurstParticleCount === 8
+    ),
+    'Open-folder unload button bursts at the click point'
+  );
+  const openFolderUnloadFinal = openFolderUnloadSamples.at(-1);
+  assert.equal(openFolderUnloadFinal.effectCount, 0, 'Outline absorption overlay finishes cleanly');
+  assert.equal(openFolderUnloadFinal.iconShake, false, 'Favicon shake finishes cleanly');
+  assert.equal(openFolderUnloadFinal.controlBurstEffectCount, 0, 'Open-folder control burst finishes cleanly');
+  console.log('PASS: open-folder outline is absorbed into the favicon before its storage shake');
 
   await run('window.__folderTest.folder.collapsed=false;');
   await sleep(500);

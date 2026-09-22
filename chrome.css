@@ -116,9 +116,8 @@
 }
 
 /*
- * Animate unloaded tabs in both directions. Keeping the expanded rule active
- * prevents their height from jumping to its final value before Zen starts its
- * expand animation, while loaded tabs remain untouched and continuously shown.
+ * Keep unloaded tabs fully visible while their folder is open. Folder-state
+ * attributes below opt into transitions only for actual expand/collapse motion.
  */
 #tabbrowser-tabs zen-folder .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
   --folder-open-tabs-unloaded-height: calc(var(--tab-min-height) + 2 * var(--tab-margin-block));
@@ -129,6 +128,12 @@
   max-height: var(--folder-open-tabs-unloaded-height) !important;
   overflow: hidden !important;
   opacity: var(--folder-open-tabs-unloaded-opacity) !important;
+  transition-property: none !important;
+  transition-duration: 0s !important;
+}
+
+/* Animate these values only while the folder itself opens or closes. */
+#tabbrowser-tabs zen-folder:is([collapsed], [folder-open-tabs-expand-motion]) .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
   transition-property: --folder-open-tabs-unloaded-height, --folder-open-tabs-unloaded-opacity !important;
   transition-duration: var(--folder-open-tabs-toggle-duration) !important;
   transition-timing-function: var(--folder-open-tabs-toggle-easing) !important;
@@ -162,7 +167,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #tabbrowser-tabs zen-folder .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
+  #tabbrowser-tabs zen-folder .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]),
+  #tabbrowser-tabs zen-folder:is([collapsed], [folder-open-tabs-expand-motion]) .tabbrowser-tab:is([pending], [discarded]):not([zen-empty-tab], [hidden], [closing]) {
     transition-duration: 0s !important;
   }
 }

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Folder Open Tabs Motion
-// @description  Adds smooth selection, page-depth, and ungrouped-tab close motion to Zen.
-// @version      0.4.16
-// @lastUpdated  2026-09-21
+// @description  Adds smooth selection, page-depth, and tab close motion to Zen.
+// @version      0.4.30
+// @lastUpdated  2026-09-22
 // ==/UserScript==
 
 (() => {
@@ -11,11 +11,20 @@
   const TARGET_ATTRIBUTE = "folder-open-tabs-selection-target";
   const PAGE_DEPTH_ANIMATION_ID = "folder-open-tabs-page-depth";
   const FOLDER_COLLAPSE_START_ATTRIBUTE = "folder-open-tabs-collapse-start";
+  const FOLDER_EXPAND_MOTION_ATTRIBUTE = "folder-open-tabs-expand-motion";
   const CLOSE_PARTICLE_EFFECT_CLASS = "folder-open-tabs-close-particle-effect";
   const CLOSE_PARTICLE_CLASS = "folder-open-tabs-close-particle";
+  const FOLDER_RETURN_EFFECT_CLASS = "folder-open-tabs-folder-return-effect";
+  const FOLDER_RETURN_SURFACE_CLASS = "folder-open-tabs-folder-return-surface";
+  const FOLDER_RETURN_TARGET_CLASS = "folder-open-tabs-folder-return-target";
+  const OPEN_UNLOAD_EFFECT_CLASS = "folder-open-tabs-open-unload-effect";
+  const OPEN_UNLOAD_RING_CLASS = "folder-open-tabs-open-unload-ring";
+  const CONTROL_BURST_EFFECT_CLASS = "folder-open-tabs-control-burst-effect";
+  const CONTROL_BURST_PARTICLE_CLASS = "folder-open-tabs-control-burst-particle";
   const FOLDER_TOGGLE_DURATION = 280;
-  const NATIVE_FOLDER_TOGGLE_DURATION = 180;
   const FOLDER_TOGGLE_EASING = "ease-in-out";
+  const FOLDER_COLLAPSED_GAP = 4;
+  const FOLDER_FOLLOWER_PREP_DELAY = 16;
   const DURATION = 360;
   const PAGE_DEPTH_DURATION = 160;
   const PAGE_DEPTH_START_SCALE = 0.985;
@@ -24,6 +33,12 @@
   const TAB_CLOSE_PARTICLE_COUNT = 60;
   const TAB_CLOSE_LAYOUT_DELAY = 90;
   const TAB_CLOSE_LAYOUT_DURATION = 160;
+  const FOLDER_RETURN_DURATION = 560;
+  const FOLDER_RETURN_FRAME_COUNT = 35;
+  const OPEN_UNLOAD_DURATION = 320;
+  const OPEN_UNLOAD_SHAKE_DURATION = 190;
+  const OPEN_UNLOAD_FRAME_COUNT = 21;
+  const CONTROL_BURST_DURATION = 260;
   const OVERSHOOT = 1.04;
   const REBOUND = 0.992;
   const STABLE_FRAME_LIMIT = 8;
@@ -40,6 +55,7 @@
       this.closeEffects = new Set();
       this.closeLayoutMotions = new Set();
       this.folderFollowerMotions = new Set();
+      this.folderExpandMotions = new Map();
       this.selectionSyncFrame = 0;
       this.selectionSyncAttempts = 0;
       this.selectionSyncAnimate = false;
@@ -61,6 +77,7 @@
         this.scheduleSelectionSync(true);
       };
       this.onTabClose = event => {
+        this.returnTabToFolder(event.target);
         this.dissolveTabUpward(event.target);
         this.scheduleSelectionSync(true);
       };
@@ -82,12 +99,30 @@
           }
         });
       };
+      this.onCloseControlPointerDown = event => {
+        if (event.button !== 0 || this.reduceMotion.matches) {
+          return;
+        }
+        const tab = event.target?.closest?.(".tabbrowser-tab");
+        if (!tab) {
+          return;
+        }
+        const tabRect = tab.getBoundingClientRect();
+        const control = event.target?.closest?.(
+          ".tab-close-button, .tab-reset-button"
+        );
+        if (!control && event.clientX < tabRect.right - 32) {
+          return;
+        }
+        this.burstCloseControl(event.clientX, event.clientY);
+      };
       this.onMotionPreferenceChange = () => {
         if (this.reduceMotion.matches) {
           this.cancelPageDepth();
           this.clearCloseEffects();
           this.clearCloseLayoutMotions();
           this.clearFolderFollowerMotions();
+          this.clearFolderExpandMotions();
           this.hide();
         } else {
           this.moveTo(this.window.gBrowser.selectedTab, false);
@@ -102,6 +137,11 @@
       this.tabContainer.addEventListener("transitionend", this.onLayoutChange, true);
       this.tabContainer.addEventListener("animationend", this.onLayoutChange, true);
       this.tabContainer.addEventListener("pointerout", this.onPointerOut, true);
+      this.tabContainer.addEventListener(
+        "pointerdown",
+        this.onCloseControlPointerDown,
+        true
+      );
       this.window.addEventListener("resize", this.onLayoutChange);
       this.reduceMotion.addEventListener("change", this.onMotionPreferenceChange);
 
@@ -114,7 +154,62 @@
         attributeFilter: ["collapsed", "hidden", "selected", "style", "visuallyselected"],
       });
       this.restoreFolderAnimationTiming = this.installFolderAnimationTiming();
+      this.restoreExplicitUnloadAnimation = this.installExplicitUnloadAnimation();
       this.moveTo(this.window.gBrowser.selectedTab, false);
+    }
+
+    installExplicitUnloadAnimation() {
+      const browser = this.window.gBrowser;
+      const original = browser?.explicitUnloadTabs;
+      if (typeof original !== "function") {
+        return () => {};
+      }
+
+      const hadOwnMethod = Object.prototype.hasOwnProperty.call(
+        browser,
+        "explicitUnloadTabs"
+      );
+      const controller = this;
+      const wrapped = function (tabs, ...args) {
+        const tabList = Array.isArray(tabs) ? tabs : [tabs].filter(Boolean);
+        const motions = tabList
+          .flatMap(tab => [
+            controller.returnTabToFolder(tab),
+            controller.absorbOutlineIntoIcon(tab),
+          ])
+          .filter(Boolean);
+        let result;
+        try {
+          result = original.call(this, tabs, ...args);
+        } catch (error) {
+          motions.forEach(motion => motion.cleanup());
+          throw error;
+        }
+        return Promise.resolve(result).then(
+          successful => {
+            if (!successful) {
+              motions.forEach(motion => motion.cleanup());
+            }
+            return successful;
+          },
+          error => {
+            motions.forEach(motion => motion.cleanup());
+            throw error;
+          }
+        );
+      };
+
+      browser.explicitUnloadTabs = wrapped;
+      return () => {
+        if (browser.explicitUnloadTabs !== wrapped) {
+          return;
+        }
+        if (hadOwnMethod) {
+          browser.explicitUnloadTabs = original;
+        } else {
+          delete browser.explicitUnloadTabs;
+        }
+      };
     }
 
     installFolderAnimationTiming() {
@@ -135,19 +230,33 @@
           const collapseMotion = methodName === "animateCollapse"
             ? controller.prepareFolderCollapseMotion(group)
             : null;
-          const followerMotion = methodName === "animateExpand"
-            ? controller.prepareFolderFollowerMotion(group)
+          const expandMotion = methodName === "animateExpand"
+            ? controller.startFolderExpandMotion(group)
+            : null;
+          const followerStartHeight = methodName === "animateExpand"
+            ? controller.captureFolderFollowerStartHeight(group)
             : null;
           const animationsBefore = new Set(
             group?.getAnimations?.({ subtree: true }) ?? []
           );
-          const result = original.call(this, group, ...args);
-          controller.retimeFolderAnimations(group, animationsBefore);
-          controller.window.queueMicrotask(() =>
-            controller.retimeFolderAnimations(group, animationsBefore)
-          );
+          let result;
+          try {
+            result = original.call(this, group, ...args);
+          } catch (error) {
+            controller.finishFolderExpandMotion(expandMotion);
+            throw error;
+          }
+          controller.finishFolderExpandMotion(expandMotion, result);
+          controller.finishFolderCollapseMotion(collapseMotion, result);
+          const retime = () =>
+            controller.retimeFolderAnimations(group, animationsBefore);
+          retime();
+          controller.window.queueMicrotask(retime);
+          controller.window.requestAnimationFrame(retime);
           controller.startFolderCollapseMotion(collapseMotion);
-          controller.startFolderFollowerMotion(followerMotion);
+          if (methodName === "animateExpand") {
+            controller.scheduleFolderFollowerMotion(group, followerStartHeight);
+          }
           return result;
         };
 
@@ -165,6 +274,113 @@
       });
 
       return () => restorers.forEach(restore => restore());
+    }
+
+    scheduleFolderFollowerMotion(group, startHeight) {
+      if (!Number.isFinite(startHeight) || startHeight <= 0) {
+        return;
+      }
+      this.window.setTimeout(() => {
+        if (!group?.isConnected || group.collapsed) {
+          return;
+        }
+        const motion = this.prepareFolderFollowerMotion(group, startHeight);
+        this.startFolderFollowerMotion(motion);
+      }, FOLDER_FOLLOWER_PREP_DELAY);
+    }
+
+    finishFolderCollapseMotion(group, result) {
+      if (!group) {
+        return;
+      }
+      const normalize = () => {
+        if (!group.isConnected || !group.collapsed) {
+          return;
+        }
+        const allTabsUnloaded = !group.querySelector(
+          ".tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing])"
+        );
+        if (!allTabsUnloaded || !group.groupStartElement) {
+          return;
+        }
+        group.groupStartElement.style.setProperty(
+          "margin-top",
+          `-${FOLDER_COLLAPSED_GAP}px`
+        );
+      };
+      if (result && typeof result.then === "function") {
+        Promise.resolve(result).then(normalize, normalize);
+      } else {
+        this.window.setTimeout(normalize, FOLDER_TOGGLE_DURATION);
+      }
+    }
+
+    captureFolderFollowerStartHeight(group) {
+      if (this.reduceMotion.matches || !group?.groupStartElement) {
+        return null;
+      }
+      const allTabsUnloaded = !group.querySelector(
+        ".tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing])"
+      );
+      if (allTabsUnloaded) {
+        return null;
+      }
+      const startHeight = group.getBoundingClientRect().height;
+      return Number.isFinite(startHeight) && startHeight > 0 ? startHeight : null;
+    }
+
+    startFolderExpandMotion(group) {
+      if (!group) {
+        return null;
+      }
+      const allTabsUnloaded = !group.querySelector(
+        ".tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing])"
+      );
+      if (allTabsUnloaded && group.groupStartElement) {
+        group.groupStartElement.style.setProperty(
+          "margin-top",
+          `-${FOLDER_COLLAPSED_GAP}px`
+        );
+      }
+      const motion = this.folderExpandMotions.get(group);
+      if (motion) {
+        motion.count += 1;
+      } else {
+        this.folderExpandMotions.set(group, {
+          count: 1,
+          startedAt: this.window.performance.now(),
+        });
+      }
+      group.setAttribute(FOLDER_EXPAND_MOTION_ATTRIBUTE, "true");
+      return group;
+    }
+
+    finishFolderExpandMotion(group, result) {
+      if (!group) {
+        return;
+      }
+      const release = () => {
+        const motion = this.folderExpandMotions.get(group);
+        if (!motion) {
+          return;
+        }
+        motion.count -= 1;
+        if (motion.count > 0) {
+          return;
+        }
+        const elapsed = this.window.performance.now() - motion.startedAt;
+        if (elapsed < FOLDER_TOGGLE_DURATION) {
+          this.window.setTimeout(release, FOLDER_TOGGLE_DURATION - elapsed);
+          return;
+        }
+        this.folderExpandMotions.delete(group);
+        group.removeAttribute(FOLDER_EXPAND_MOTION_ATTRIBUTE);
+      };
+      if (result && typeof result.then === "function") {
+        Promise.resolve(result).then(release, release);
+      } else {
+        this.window.setTimeout(release, FOLDER_TOGGLE_DURATION);
+      }
     }
 
     prepareFolderCollapseMotion(group) {
@@ -192,12 +408,17 @@
       );
     }
 
-    prepareFolderFollowerMotion(group) {
+    prepareFolderFollowerMotion(group, startHeight = null) {
       if (this.reduceMotion.matches || !group?.groupStartElement) {
         return null;
       }
 
-      const startHeight = group.getBoundingClientRect().height;
+      const allTabsUnloaded = !group.querySelector(
+        ".tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing])"
+      );
+      if (allTabsUnloaded) {
+        return null;
+      }
       if (!Number.isFinite(startHeight) || startHeight <= 0) {
         return null;
       }
@@ -255,7 +476,12 @@
       const scrollbox = this.tabContainer.arrowScrollbox?.scrollbox ?? null;
       return {
         group,
+        groupStart: group.groupStartElement,
         startHeight,
+        startMarginTop: Number.parseFloat(
+          this.window.getComputedStyle(group.groupStartElement).marginTop
+        ) || 0,
+        allTabsUnloaded,
         items,
         scrollbox,
         originalOverflowAnchor: scrollbox?.style.getPropertyValue("overflow-anchor") ?? "",
@@ -277,6 +503,26 @@
         stableFrames: 0,
         lastHeight: motion.startHeight,
       };
+      if (state.allTabsUnloaded) {
+        const marginAnimation = state.groupStart
+          .getAnimations()
+          .find(animation =>
+            animation.effect?.getKeyframes().some(frame => frame.marginTop != null)
+          );
+        const marginFrames = marginAnimation?.effect?.getKeyframes() ?? [];
+        const targetMarginTop = Number.parseFloat(
+          marginFrames.at(-1)?.marginTop
+        );
+        const marginTravel = targetMarginTop - state.startMarginTop;
+        if (Number.isFinite(marginTravel) && Math.abs(marginTravel) > POSITION_EPSILON) {
+          state.marginTravel = marginTravel;
+          state.marginScale = Math.max(
+            0,
+            (Math.abs(marginTravel) - FOLDER_COLLAPSED_GAP) /
+              Math.abs(marginTravel)
+          );
+        }
+      }
       this.folderFollowerMotions.add(state);
 
       if (state.scrollbox) {
@@ -329,16 +575,28 @@
 
       const track = () => {
         state.frame = 0;
-        if (state.cancelled || !state.group.isConnected || state.group.collapsed) {
+        if (
+          state.cancelled ||
+          !state.group.isConnected ||
+          (state.group.collapsed && !state.marginTravel)
+        ) {
           cleanup();
           return;
         }
 
         state.frames += 1;
         const currentHeight = state.group.getBoundingClientRect().height;
-        const shift = Number.isFinite(currentHeight)
-          ? currentHeight - state.startHeight
+        const currentMarginTop = Number.parseFloat(
+          this.window.getComputedStyle(state.groupStart).marginTop
+        );
+        const marginShift = Number.isFinite(currentMarginTop)
+          ? currentMarginTop - state.startMarginTop
           : 0;
+        const shift = state.marginTravel
+          ? marginShift * state.marginScale
+          : Number.isFinite(currentHeight)
+            ? currentHeight - state.startHeight
+            : 0;
         let maximumOffset = 0;
 
         state.items.forEach(item => {
@@ -357,8 +615,10 @@
           );
         });
 
-        const heightIsStable = Math.abs(currentHeight - state.lastHeight) <= POSITION_EPSILON;
-        state.lastHeight = currentHeight;
+        const trackedPosition = state.marginTravel ? currentMarginTop : currentHeight;
+        const heightIsStable =
+          Math.abs(trackedPosition - state.lastHeight) <= POSITION_EPSILON;
+        state.lastHeight = trackedPosition;
         state.stableFrames = state.frames >= 5 && heightIsStable && maximumOffset <= 0.5
           ? state.stableFrames + 1
           : 0;
@@ -377,18 +637,45 @@
       }
     }
 
+    clearFolderExpandMotions() {
+      for (const group of this.folderExpandMotions.keys()) {
+        group.removeAttribute(FOLDER_EXPAND_MOTION_ATTRIBUTE);
+      }
+      this.folderExpandMotions.clear();
+    }
+
     retimeFolderAnimations(group, animationsBefore) {
       if (!group?.getAnimations) {
         return;
       }
 
+      const allTabsUnloaded = !group.querySelector(
+        ".tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing])"
+      );
+      const groupStart = group.groupStartElement;
       for (const animation of group.getAnimations({ subtree: true })) {
         if (animationsBefore.has(animation) || animation.id?.startsWith("folder-open-tabs-")) {
           continue;
         }
         const effect = animation.effect;
-        if (!effect || effect.getTiming().duration !== NATIVE_FOLDER_TOGGLE_DURATION) {
+        const duration = effect?.getTiming().duration;
+        if (!effect || !Number.isFinite(duration)) {
           continue;
+        }
+        if (
+          group.collapsed &&
+          allTabsUnloaded &&
+          effect.target === groupStart &&
+          typeof effect.setKeyframes === "function"
+        ) {
+          const keyframes = effect.getKeyframes();
+          const startMarginTop = keyframes[0]?.marginTop;
+          if (startMarginTop != null) {
+            effect.setKeyframes([
+              { marginTop: startMarginTop },
+              { marginTop: `-${FOLDER_COLLAPSED_GAP}px` },
+            ]);
+          }
         }
         effect.updateTiming({
           duration: FOLDER_TOGGLE_DURATION,
@@ -538,6 +825,503 @@
     cancelPageDepth() {
       this.pageAnimation?.cancel();
       this.pageAnimation = null;
+    }
+
+    absorbOutlineIntoIcon(tab) {
+      const folder = tab?.closest?.("zen-folder");
+      if (
+        this.reduceMotion.matches ||
+        !folder ||
+        tab.closest("zen-folder[collapsed]") ||
+        tab.matches("[pending], [discarded], [zen-empty-tab], [hidden], [closing]") ||
+        this.tabs.getAttribute("orient") !== "vertical"
+      ) {
+        return null;
+      }
+
+      const background = tab.querySelector(":scope > .tab-stack > .tab-background");
+      const icon = [...tab.querySelectorAll(".tab-icon-image, .tab-throbber")]
+        .find(element => {
+          const rect = element.getBoundingClientRect();
+          const style = this.window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden";
+        });
+      const backgroundRect = background?.getBoundingClientRect();
+      const iconRect = icon?.getBoundingClientRect();
+      if (
+        !backgroundRect ||
+        backgroundRect.width <= 0 ||
+        backgroundRect.height <= 0 ||
+        !iconRect ||
+        iconRect.width <= 0 ||
+        iconRect.height <= 0
+      ) {
+        return null;
+      }
+
+      const backgroundStyle = this.window.getComputedStyle(background);
+      const tabStyle = this.window.getComputedStyle(tab);
+      const outlineWidth = Math.max(1, Number.parseFloat(backgroundStyle.outlineWidth) || 1.5);
+      const outlineColor =
+        backgroundStyle.outlineStyle !== "none" &&
+        backgroundStyle.outlineColor !== "rgba(0, 0, 0, 0)"
+          ? backgroundStyle.outlineColor
+          : `color-mix(in srgb, ${tabStyle.color} 56%, transparent)`;
+      const effect = this.document.createElementNS(XHTML_NAMESPACE, "div");
+      effect.className = OPEN_UNLOAD_EFFECT_CLASS;
+      effect.setAttribute("aria-hidden", "true");
+      effect.dataset.renderer = "outline-absorption";
+      effect.dataset.folderId = folder.id;
+      Object.assign(effect.style, {
+        position: "fixed",
+        top: `${backgroundRect.top}px`,
+        left: `${backgroundRect.left}px`,
+        width: `${backgroundRect.width}px`,
+        height: `${backgroundRect.height}px`,
+        overflow: "visible",
+        pointerEvents: "none",
+        zIndex: "2147483646",
+      });
+
+      const ring = this.document.createElementNS(XHTML_NAMESPACE, "span");
+      ring.className = OPEN_UNLOAD_RING_CLASS;
+      Object.assign(ring.style, {
+        position: "absolute",
+        left: "0px",
+        top: "0px",
+        width: `${backgroundRect.width}px`,
+        height: `${backgroundRect.height}px`,
+        boxSizing: "border-box",
+        border: `${outlineWidth}px solid ${outlineColor}`,
+        borderRadius: "999px",
+        background: "transparent",
+        boxShadow: `0 0 4px color-mix(in srgb, ${outlineColor} 62%, transparent)`,
+        willChange: "left, top, width, height, opacity, filter",
+      });
+      effect.appendChild(ring);
+      this.document.documentElement.appendChild(effect);
+
+      const destinationX = iconRect.left + iconRect.width / 2 - backgroundRect.left;
+      const destinationY = iconRect.top + iconRect.height / 2 - backgroundRect.top;
+      const finalDiameter = Math.max(4, Math.min(7, iconRect.width * 0.4));
+      const smootherStep = progress =>
+        progress * progress * progress * (progress * (progress * 6 - 15) + 10);
+      const ringKeyframes = Array.from(
+        { length: OPEN_UNLOAD_FRAME_COUNT },
+        (_, index) => {
+          const progress = index / (OPEN_UNLOAD_FRAME_COUNT - 1);
+          const travel = smootherStep(progress);
+          const width = backgroundRect.width + (finalDiameter - backgroundRect.width) * travel;
+          const height = backgroundRect.height + (finalDiameter - backgroundRect.height) * travel;
+          const centerX = backgroundRect.width / 2 +
+            (destinationX - backgroundRect.width / 2) * travel;
+          const centerY = backgroundRect.height / 2 +
+            (destinationY - backgroundRect.height / 2) * travel;
+          const fade = progress <= 0.76
+            ? 0
+            : smootherStep((progress - 0.76) / 0.24);
+          return {
+            left: `${centerX - width / 2}px`,
+            top: `${centerY - height / 2}px`,
+            width: `${width}px`,
+            height: `${height}px`,
+            opacity: 1 - fade,
+            filter: `blur(${0.55 * travel}px)`,
+            offset: progress,
+          };
+        }
+      );
+      const ringAnimation = ring.animate(ringKeyframes, {
+        duration: OPEN_UNLOAD_DURATION,
+        easing: "linear",
+        fill: "both",
+      });
+      ringAnimation.id = "folder-open-tabs-open-unload-ring";
+
+      this.closeEffects.add(effect);
+      let cleanupTimer;
+      let iconAnimation = null;
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) {
+          return;
+        }
+        cleaned = true;
+        this.window.clearTimeout(cleanupTimer);
+        ringAnimation.cancel();
+        iconAnimation?.cancel();
+        this.closeEffects.delete(effect);
+        effect.remove();
+      };
+      const shakeIcon = () => {
+        if (cleaned) {
+          return;
+        }
+        effect.remove();
+        const visibleIcon = [...tab.querySelectorAll(".tab-icon-image, .tab-throbber")]
+          .find(element => {
+            const rect = element.getBoundingClientRect();
+            const style = this.window.getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden";
+          });
+        if (!visibleIcon) {
+          cleanup();
+          return;
+        }
+        iconAnimation = visibleIcon.animate(
+          [
+            { transform: "translateX(0) rotate(0deg) scale(1)", offset: 0 },
+            { transform: "translateX(-1.3px) rotate(-4deg) scale(0.96)", offset: 0.24 },
+            { transform: "translateX(1.1px) rotate(3deg) scale(1.02)", offset: 0.5 },
+            { transform: "translateX(-0.45px) rotate(-1.4deg) scale(0.99)", offset: 0.74 },
+            { transform: "translateX(0) rotate(0deg) scale(1)", offset: 1 },
+          ],
+          {
+            duration: OPEN_UNLOAD_SHAKE_DURATION,
+            easing: "ease-out",
+          }
+        );
+        iconAnimation.id = "folder-open-tabs-open-unload-icon-shake";
+        iconAnimation.finished.then(cleanup, cleanup);
+      };
+      effect.__folderOpenTabsCleanup = cleanup;
+      cleanupTimer = this.window.setTimeout(
+        cleanup,
+        OPEN_UNLOAD_DURATION + OPEN_UNLOAD_SHAKE_DURATION + 180
+      );
+      ringAnimation.finished.then(shakeIcon, cleanup);
+      return { cleanup };
+    }
+
+    returnTabToFolder(tab) {
+      const folder = tab?.closest?.("zen-folder[collapsed]");
+      if (
+        this.reduceMotion.matches ||
+        !folder ||
+        tab.matches("[pending], [discarded], [zen-empty-tab], [hidden]") ||
+        this.tabs.getAttribute("orient") !== "vertical"
+      ) {
+        return null;
+      }
+
+      const folderLabel = folder.querySelector(":scope > .tab-group-label-container");
+      const folderIcon = folderLabel?.querySelector(".tab-group-folder-icon");
+      const tabRect = tab.getBoundingClientRect();
+      const folderLabelRect = folderLabel?.getBoundingClientRect();
+      const folderIconRect = folderIcon?.getBoundingClientRect();
+      const destinationRect = folderIconRect?.width > 0 && folderIconRect?.height > 0
+        ? folderIconRect
+        : folderLabelRect;
+      if (
+        tabRect.width <= 0 ||
+        tabRect.height <= 0 ||
+        !destinationRect ||
+        destinationRect.width <= 0 ||
+        destinationRect.height <= 0
+      ) {
+        return null;
+      }
+      const effect = this.document.createElementNS(XHTML_NAMESPACE, "div");
+      effect.className = FOLDER_RETURN_EFFECT_CLASS;
+      effect.setAttribute("aria-hidden", "true");
+      effect.dataset.renderer = "folder-return";
+      effect.dataset.folderId = folder.id;
+      Object.assign(effect.style, {
+        position: "fixed",
+        top: `${tabRect.top}px`,
+        left: `${tabRect.left}px`,
+        width: `${tabRect.width}px`,
+        height: `${tabRect.height}px`,
+        overflow: "visible",
+        pointerEvents: "none",
+        transformOrigin: "center center",
+        willChange: "transform, opacity, filter",
+        zIndex: "2147483646",
+      });
+
+      const tabBackground = tab.querySelector(":scope > .tab-stack > .tab-background");
+      const selectedBackground =
+        tab === this.currentTab && !this.highlight.hidden ? this.highlight : null;
+      const backgroundSource = selectedBackground ?? tabBackground;
+      const backgroundRect = backgroundSource?.getBoundingClientRect();
+      const backgroundStyle = backgroundSource
+        ? this.window.getComputedStyle(backgroundSource)
+        : null;
+      if (backgroundRect && backgroundStyle) {
+        const surface = this.document.createElementNS(XHTML_NAMESPACE, "div");
+        surface.className = FOLDER_RETURN_SURFACE_CLASS;
+        Object.assign(surface.style, {
+          position: "absolute",
+          top: `${backgroundRect.top - tabRect.top}px`,
+          left: `${backgroundRect.left - tabRect.left}px`,
+          width: `${backgroundRect.width}px`,
+          height: `${backgroundRect.height}px`,
+          boxSizing: "border-box",
+          background: backgroundStyle.background,
+          border: backgroundStyle.border,
+          borderRadius: backgroundStyle.borderRadius,
+          boxShadow: backgroundStyle.boxShadow,
+          colorScheme: backgroundStyle.colorScheme,
+          outline: backgroundStyle.outline,
+          outlineOffset: backgroundStyle.outlineOffset,
+          opacity: backgroundStyle.opacity,
+        });
+        surface.style.setProperty(
+          "corner-shape",
+          backgroundStyle.getPropertyValue("corner-shape") || "round"
+        );
+        effect.appendChild(surface);
+      }
+
+      const labelSource = tab.querySelector(".tab-label");
+      const labelRect = labelSource?.getBoundingClientRect();
+      if (labelSource && labelRect?.width > 0 && labelRect?.height > 0) {
+        const labelStyle = this.window.getComputedStyle(labelSource);
+        const label = this.document.createElementNS(XHTML_NAMESPACE, "span");
+        label.textContent = labelSource.textContent;
+        Object.assign(label.style, {
+          position: "absolute",
+          top: `${labelRect.top - tabRect.top}px`,
+          left: `${labelRect.left - tabRect.left}px`,
+          width: `${labelRect.width}px`,
+          height: `${labelRect.height}px`,
+          overflow: "hidden",
+          color: labelStyle.color,
+          font: labelStyle.font,
+          lineHeight: labelStyle.lineHeight,
+          opacity: labelStyle.opacity,
+          textAlign: labelStyle.textAlign,
+          textOverflow: "ellipsis",
+          textShadow: labelStyle.textShadow,
+          whiteSpace: "nowrap",
+        });
+        effect.appendChild(label);
+      }
+
+      const iconSource = [...tab.querySelectorAll(".tab-icon-image, .tab-throbber")]
+        .find(element => {
+          const rect = element.getBoundingClientRect();
+          const style = this.window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden";
+        });
+      const iconRect = iconSource?.getBoundingClientRect();
+      if (iconSource && iconRect) {
+        const iconStyle = this.window.getComputedStyle(iconSource);
+        const icon = this.document.createElementNS(XHTML_NAMESPACE, "span");
+        const listImage = iconStyle.getPropertyValue("list-style-image");
+        Object.assign(icon.style, {
+          position: "absolute",
+          top: `${iconRect.top - tabRect.top}px`,
+          left: `${iconRect.left - tabRect.left}px`,
+          width: `${iconRect.width}px`,
+          height: `${iconRect.height}px`,
+          backgroundColor: iconStyle.backgroundColor,
+          backgroundImage: listImage && listImage !== "none"
+            ? listImage
+            : iconStyle.backgroundImage,
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          backgroundSize: "contain",
+          borderRadius: iconStyle.borderRadius,
+          opacity: iconStyle.opacity,
+        });
+        effect.appendChild(icon);
+      }
+
+      const receiver = this.document.createElementNS(XHTML_NAMESPACE, "div");
+      receiver.className = FOLDER_RETURN_TARGET_CLASS;
+      receiver.setAttribute("aria-hidden", "true");
+      const tabColor = this.window.getComputedStyle(tab).color;
+      Object.assign(receiver.style, {
+        position: "fixed",
+        top: `${folderLabelRect.bottom - 3}px`,
+        left: `${folderLabelRect.left + 12}px`,
+        width: `${Math.max(12, folderLabelRect.width - 24)}px`,
+        height: "3px",
+        boxSizing: "border-box",
+        background: `color-mix(in srgb, ${tabColor} 68%, transparent)`,
+        borderRadius: "999px",
+        boxShadow: `0 0 7px color-mix(in srgb, ${tabColor} 44%, transparent)`,
+        opacity: "0",
+        pointerEvents: "none",
+        transformOrigin: "center center",
+        zIndex: "2147483646",
+      });
+      this.document.documentElement.append(effect, receiver);
+
+      const destinationX =
+        destinationRect.left + destinationRect.width / 2 - (tabRect.left + tabRect.width / 2);
+      const destinationY =
+        destinationRect.top + destinationRect.height / 2 - (tabRect.top + tabRect.height / 2);
+      const smootherStep = progress =>
+        progress * progress * progress * (progress * (progress * 6 - 15) + 10);
+      const cubicPoint = (start, control1, control2, end, progress) => {
+        const inverse = 1 - progress;
+        return inverse ** 3 * start +
+          3 * inverse ** 2 * progress * control1 +
+          3 * inverse * progress ** 2 * control2 +
+          progress ** 3 * end;
+      };
+      const returnKeyframes = Array.from(
+        { length: FOLDER_RETURN_FRAME_COUNT },
+        (_, index) => {
+          const progress = index / (FOLDER_RETURN_FRAME_COUNT - 1);
+          const travel = smootherStep(progress);
+          const x = cubicPoint(0, 8, destinationX * 0.62, destinationX, travel);
+          const y = cubicPoint(0, destinationY * 0.1, destinationY * 0.86, destinationY, travel);
+          const scaleX = 1 + (0.12 - 1) * travel;
+          const scaleY = 1 + (0.04 - 1) * travel;
+          const fadeProgress = progress <= 0.64
+            ? 0
+            : smootherStep((progress - 0.64) / 0.36);
+          return {
+            opacity: 1 - fadeProgress,
+            transform: `translate3d(${x}px, ${y}px, 0) scale(${scaleX}, ${scaleY})`,
+            filter: `blur(${0.8 * travel}px)`,
+            offset: progress,
+          };
+        }
+      );
+      const returnAnimation = effect.animate(
+        returnKeyframes,
+        {
+          duration: FOLDER_RETURN_DURATION,
+          easing: "linear",
+          fill: "both",
+        }
+      );
+      returnAnimation.id = "folder-open-tabs-folder-return";
+      const receiverKeyframes = Array.from(
+        { length: FOLDER_RETURN_FRAME_COUNT },
+        (_, index) => {
+          const progress = index / (FOLDER_RETURN_FRAME_COUNT - 1);
+          const arrival = Math.max(0, Math.min(1, (progress - 0.54) / 0.46));
+          const pulse = Math.sin(Math.PI * arrival) ** 2;
+          return {
+            opacity: 0.78 * pulse,
+            transform: `scaleX(${0.25 + 0.75 * pulse - 0.07 * smootherStep(progress)})`,
+            offset: progress,
+          };
+        }
+      );
+      const receiverAnimation = receiver.animate(
+        receiverKeyframes,
+        {
+          duration: FOLDER_RETURN_DURATION,
+          easing: "linear",
+          fill: "both",
+        }
+      );
+      receiverAnimation.id = "folder-open-tabs-folder-return-target";
+
+      this.closeEffects.add(effect);
+      let cleanupTimer;
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) {
+          return;
+        }
+        cleaned = true;
+        this.window.clearTimeout(cleanupTimer);
+        returnAnimation.cancel();
+        receiverAnimation.cancel();
+        this.closeEffects.delete(effect);
+        receiver.remove();
+        effect.remove();
+      };
+      effect.__folderOpenTabsCleanup = cleanup;
+      cleanupTimer = this.window.setTimeout(cleanup, FOLDER_RETURN_DURATION + 140);
+      Promise.allSettled([returnAnimation.finished, receiverAnimation.finished]).then(cleanup);
+      return { cleanup };
+    }
+
+    burstCloseControl(x, y) {
+      const vectors = [
+        { x: -10, y: -2, size: 2 },
+        { x: -8, y: -8, size: 3 },
+        { x: -2, y: -11, size: 2 },
+        { x: 5, y: -9, size: 2.5 },
+        { x: 10, y: -4, size: 2 },
+        { x: 10, y: 3, size: 3 },
+        { x: 5, y: 8, size: 2 },
+        { x: -4, y: 9, size: 2.5 },
+      ];
+      const effect = this.document.createElementNS(XHTML_NAMESPACE, "div");
+      effect.className = CONTROL_BURST_EFFECT_CLASS;
+      effect.setAttribute("aria-hidden", "true");
+      effect.dataset.renderer = "control-burst";
+      Object.assign(effect.style, {
+        position: "fixed",
+        left: `${x}px`,
+        top: `${y}px`,
+        width: "0px",
+        height: "0px",
+        overflow: "visible",
+        pointerEvents: "none",
+        zIndex: "2147483647",
+      });
+
+      const animations = vectors.map((vector, index) => {
+        const particle = this.document.createElementNS(XHTML_NAMESPACE, "span");
+        particle.className = CONTROL_BURST_PARTICLE_CLASS;
+        Object.assign(particle.style, {
+          position: "absolute",
+          left: `${-vector.size / 2}px`,
+          top: `${-vector.size / 2}px`,
+          width: `${vector.size}px`,
+          height: `${vector.size}px`,
+          background: "rgba(255, 255, 255, 0.92)",
+          borderRadius: "0px",
+          boxShadow: "0 0 2px rgba(255, 255, 255, 0.55)",
+          pointerEvents: "none",
+          willChange: "transform, opacity",
+        });
+        effect.appendChild(particle);
+        const rotation = (index % 2 === 0 ? 1 : -1) * (38 + index * 7);
+        const animation = particle.animate(
+          [
+            {
+              opacity: 0.92,
+              transform: "translate3d(0, 0, 0) rotate(0deg) scale(0.62)",
+            },
+            {
+              opacity: 1,
+              transform: `translate3d(${vector.x * 0.48}px, ${vector.y * 0.48 - 1}px, 0) rotate(${rotation * 0.42}deg) scale(1)`,
+              offset: 0.38,
+            },
+            {
+              opacity: 0,
+              transform: `translate3d(${vector.x}px, ${vector.y + 2}px, 0) rotate(${rotation}deg) scale(0.52)`,
+            },
+          ],
+          {
+            duration: CONTROL_BURST_DURATION + (index % 3) * 14,
+            easing: "cubic-bezier(0.2, 0.7, 0.2, 1)",
+            fill: "both",
+          }
+        );
+        animation.id = `folder-open-tabs-control-burst-${index}`;
+        return animation;
+      });
+      this.document.documentElement.appendChild(effect);
+      this.closeEffects.add(effect);
+
+      let cleanupTimer;
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) {
+          return;
+        }
+        cleaned = true;
+        this.window.clearTimeout(cleanupTimer);
+        animations.forEach(animation => animation.cancel());
+        this.closeEffects.delete(effect);
+        effect.remove();
+      };
+      effect.__folderOpenTabsCleanup = cleanup;
+      cleanupTimer = this.window.setTimeout(cleanup, CONTROL_BURST_DURATION + 120);
+      Promise.allSettled(animations.map(animation => animation.finished)).then(cleanup);
+      return { cleanup };
     }
 
     createCloseParticle(x, y, size, color) {
@@ -976,10 +1760,12 @@
     destroy() {
       this.animation?.cancel();
       this.restoreFolderAnimationTiming?.();
+      this.restoreExplicitUnloadAnimation?.();
       this.cancelPageDepth();
       this.clearCloseEffects();
       this.clearCloseLayoutMotions();
       this.clearFolderFollowerMotions();
+      this.clearFolderExpandMotions();
       if (this.selectionSyncFrame) {
         this.window.cancelAnimationFrame(this.selectionSyncFrame);
       }
@@ -989,6 +1775,11 @@
       this.currentTab?.removeAttribute(TARGET_ATTRIBUTE);
       this.tabContainer.removeEventListener("TabSelect", this.onTabSelect);
       this.tabContainer.removeEventListener("TabClose", this.onTabClose);
+      this.tabContainer.removeEventListener(
+        "pointerdown",
+        this.onCloseControlPointerDown,
+        true
+      );
       this.tabContainer.removeEventListener("scroll", this.onLayoutChange, true);
       this.tabContainer.removeEventListener("transitionrun", this.onLayoutChange, true);
       this.tabContainer.removeEventListener("animationstart", this.onLayoutChange, true);
