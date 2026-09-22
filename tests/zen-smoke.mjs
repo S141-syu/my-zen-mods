@@ -190,9 +190,15 @@ try {
       closedTabVisibility: window.__closeParticleTest?.tab
         ? getComputedStyle(window.__closeParticleTest.tab).visibility
         : null,
+      selectionHighlightHidden:
+        document.getElementById('folder-open-tabs-selection-highlight')?.hidden ?? true,
       particleCount: particles.length,
       particleDurations: particleAnimations.map(animation => animation.effect.getTiming().duration),
       particleDelays: particleAnimations.map(animation => animation.effect.getTiming().delay),
+      particleWave: particles.map((particle, index) => ({
+        x: Number.parseFloat(particle.style.left),
+        delay: particleAnimations[index]?.effect.getTiming().delay,
+      })),
       activeParticleCount: particleAnimations.filter(
         animation => animation.playState === 'running' || animation.playState === 'pending'
       ).length,
@@ -200,6 +206,10 @@ try {
       layoutDurations: layoutAnimations.map(animation => animation.effect.getTiming().duration),
       layoutDelays: layoutAnimations.map(animation => animation.effect.getTiming().delay),
       layoutEasings: layoutAnimations.map(animation => animation.effect.getTiming().easing),
+      finalTranslateX: particleAnimations.map(animation => {
+        const transform = animation.effect.getKeyframes().at(-1).transform;
+        return new DOMMatrixReadOnly(transform).m41;
+      }),
       finalTranslateY: particleAnimations.map(animation => {
         const transform = animation.effect.getKeyframes().at(-1).transform;
         return new DOMMatrixReadOnly(transform).m42;
@@ -244,6 +254,22 @@ try {
   const folderReturnState = () => run(`
     const effects = [...document.querySelectorAll('.folder-open-tabs-folder-return-effect')];
     const effect = effects.at(-1);
+    const sparkEffects = [
+      ...document.querySelectorAll('.folder-open-tabs-folder-return-spark-effect'),
+    ];
+    const spark = sparkEffects.at(-1);
+    const sparkAnimations = spark
+      ? [...spark.querySelectorAll('.folder-open-tabs-folder-return-spark')].flatMap(
+          particle => particle.getAnimations()
+        )
+      : [];
+    const folder = effect?.dataset.folderId
+      ? document.getElementById(effect.dataset.folderId)
+      : null;
+    const folderIcon = folder?.querySelector(
+      ':scope > .tab-group-label-container .tab-group-folder-icon svg'
+    );
+    const returningTab = window.__folderCloseReturnTest?.returningTab;
     const surface = effect?.querySelector('.folder-open-tabs-folder-return-surface');
     const target = document.querySelector('.folder-open-tabs-folder-return-target');
     const animation = effect?.getAnimations().find(
@@ -259,6 +285,12 @@ try {
       targetCount: document.querySelectorAll('.folder-open-tabs-folder-return-target').length,
       renderer: effect?.dataset.renderer,
       folderId: effect?.dataset.folderId,
+      folderReturnMotion: folder?.hasAttribute('folder-open-tabs-return-motion') ?? false,
+      folderCollapsed: folder?.collapsed ?? null,
+      folderIconState: folderIcon?.getAttribute('state'),
+      folderIconActive: folderIcon?.getAttribute('active'),
+      returningTabHeight: returningTab ? getComputedStyle(returningTab).height : null,
+      returningTabOpacity: returningTab ? getComputedStyle(returningTab).opacity : null,
       surfaceOutlineWidth: surface ? getComputedStyle(surface).outlineWidth : null,
       label: effect?.querySelector('span:not(.folder-open-tabs-folder-return-surface)')?.textContent,
       duration: animation?.effect.getTiming().duration,
@@ -273,6 +305,17 @@ try {
       openUnloadEffectCount: document.querySelectorAll('.folder-open-tabs-open-unload-effect').length,
       controlBurstEffectCount: document.querySelectorAll('.folder-open-tabs-control-burst-effect').length,
       controlBurstParticleCount: document.querySelectorAll('.folder-open-tabs-control-burst-particle').length,
+      completionSparkEffectCount: sparkEffects.length,
+      completionSparkRenderer: spark?.dataset.renderer,
+      completionSparkParticleCount: spark?.querySelectorAll('.folder-open-tabs-folder-return-spark').length ?? 0,
+      completionSparkShapes: spark
+        ? [...spark.querySelectorAll('.folder-open-tabs-folder-return-spark')].map(particle => ({
+            width: particle.style.width,
+            height: particle.style.height,
+            borderRadius: particle.style.borderRadius,
+          }))
+        : [],
+      completionSparkDurations: sparkAnimations.map(animation => animation.effect.getTiming().duration),
     };
   `);
   await sleep(3000);
@@ -547,7 +590,7 @@ try {
     followingTab.setAttribute('label', 'Following tab');
     gBrowser.moveTabTo(tab, anchorTab._tPos + 1);
     gBrowser.moveTabTo(followingTab, tab._tPos + 1);
-    gBrowser.selectedTab = anchorTab;
+    gBrowser.selectedTab = tab;
     window.__closeParticleTest = { anchorTab, tab, followingTab };
   `);
   await sleep(450);
@@ -587,19 +630,42 @@ try {
   assert.equal(closeParticleDuringClose.renderer, 'particles-only');
   assert.equal(closeParticleDuringClose.ghostCount, 0, 'Closed tab ghost is never reconstructed');
   assert.equal(closeParticleDuringClose.closedTabVisibility, 'hidden', 'Closing tab stays hidden');
+  assert.equal(closeParticleDuringClose.selectionHighlightHidden, true, 'Selection highlight is removed before close motion');
   assert.equal(closeParticleDuringClose.particleCount, 60, 'Close effect uses 60 particles');
   assert.equal(closeParticleDuringClose.particleDurations.length, 60);
   assert(
-    closeParticleDuringClose.particleDurations.every(duration => duration >= 385 && duration <= 455),
+    closeParticleDuringClose.particleDurations.every(duration => duration >= 225 && duration <= 295),
     'Particles use short varied durations'
   );
   assert(
-    closeParticleDuringClose.particleDelays.every(delay => delay >= 0 && delay <= 68),
-    'Particles use a restrained upward dissolve wave'
+    closeParticleDuringClose.particleDelays.every(delay => delay >= 0 && delay <= 220),
+    'Particles use a restrained right-to-left dissolve wave'
   );
   assert(
-    closeParticleDuringClose.finalTranslateY.every(translateY => translateY <= -7),
-    'Every particle moves upward'
+    closeParticleDuringClose.finalTranslateX.every(
+      translateX => translateX >= -4 && translateX <= -1.5
+    ),
+    'Particles drift slightly toward the upper-left'
+  );
+  assert(
+    closeParticleDuringClose.finalTranslateY.every(
+      translateY => translateY >= -4 && translateY <= -1.5
+    ),
+    'Particles keep a slight upward drift'
+  );
+  const leftmostCloseParticle = closeParticleDuringClose.particleWave.reduce(
+    (leftmost, particle) => particle.x < leftmost.x ? particle : leftmost
+  );
+  const rightmostCloseParticle = closeParticleDuringClose.particleWave.reduce(
+    (rightmost, particle) => particle.x > rightmost.x ? particle : rightmost
+  );
+  assert(
+    rightmostCloseParticle.delay < leftmostCloseParticle.delay,
+    'Close dissolve starts at the right edge and progresses left'
+  );
+  assert(
+    leftmostCloseParticle.delay - rightmostCloseParticle.delay >= 150,
+    'Close dissolve keeps a visible left-right timing difference'
   );
   const closeLayoutHeld = await run(
     'return window.__closeParticleTest.followingTab.getBoundingClientRect().top;'
@@ -730,6 +796,12 @@ try {
   assert.equal(folderReturnDuringClose.targetCount, 1, 'Folder icon creates one receiving pulse');
   assert.equal(folderReturnDuringClose.renderer, 'folder-return');
   assert.equal(folderReturnDuringClose.folderId, folderReturnGeometry.folderId);
+  assert.equal(folderReturnDuringClose.folderReturnMotion, true, 'Folder opens during return motion');
+  assert.equal(folderReturnDuringClose.folderCollapsed, true, 'Folder remains logically collapsed during return motion');
+  assert.equal(folderReturnDuringClose.folderIconState, 'open', 'Folder icon uses the open appearance');
+  assert.equal(folderReturnDuringClose.folderIconActive, 'false', 'Open folder icon hides the collapsed active dots');
+  assert.equal(folderReturnDuringClose.returningTabHeight, '0px', 'Returning tab stays collapsed during return motion');
+  assert.equal(folderReturnDuringClose.returningTabOpacity, '0', 'Returning tab stays hidden during return motion');
   assert.equal(folderReturnDuringClose.surfaceOutlineWidth, '1px', 'Return overlay preserves the loaded-tab outline');
   assert.equal(
     folderReturnDuringClose.label,
@@ -756,6 +828,7 @@ try {
   assert(Math.abs(folderReturnDuringClose.finalScaleX - 0.12) < 0.001);
   assert(Math.abs(folderReturnDuringClose.finalScaleY - 0.04) < 0.001);
   assert.equal(folderReturnDuringClose.particleEffectCount, 0, 'Folder return does not create close particles');
+  assert.equal(folderReturnDuringClose.completionSparkEffectCount, 0, 'Completion spark waits for storage to finish');
   assert.equal(folderReturnDuringClose.openUnloadEffectCount, 0, 'Collapsed folders do not use open-folder unload motion');
   assert.equal(folderReturnDuringClose.controlBurstEffectCount, 1, 'Collapsed-folder unload button bursts at the click point');
   assert.equal(folderReturnDuringClose.controlBurstParticleCount, 8);
@@ -764,6 +837,38 @@ try {
   assert.equal(folderReturnAfterClose.effectCount, 0, 'Folder return overlay finishes cleanly');
   assert.equal(folderReturnAfterClose.targetCount, 0, 'Folder receiving pulse finishes cleanly');
   assert.equal(folderReturnAfterClose.controlBurstEffectCount, 0, 'Unload control burst finishes cleanly');
+  assert.equal(folderReturnAfterClose.completionSparkEffectCount, 1, 'Completion spark starts after storage finishes');
+  assert.equal(folderReturnAfterClose.completionSparkRenderer, 'folder-return-completion-spark');
+  assert.equal(folderReturnAfterClose.completionSparkParticleCount, 10);
+  assert(
+    folderReturnAfterClose.completionSparkShapes.every(
+      ({ width, height, borderRadius }) => width !== height && borderRadius === '0.5px'
+    ),
+    'Completion spark uses rectangular confetti pieces'
+  );
+  assert(
+    folderReturnAfterClose.completionSparkShapes.every(
+      ({ width, height }) => Number.parseFloat(width) >= 3.8 && Number.parseFloat(height) >= 2
+    ),
+    'Completion spark uses visible confetti pieces'
+  );
+  assert(
+    folderReturnAfterClose.completionSparkDurations.every(duration => duration >= 320 && duration <= 356),
+    'Completion confetti uses a slower particle burst'
+  );
+  await sleep(300);
+  const folderReturnAfterSpark = await folderReturnState();
+  assert.equal(folderReturnAfterSpark.completionSparkEffectCount, 0, 'Completion spark finishes cleanly');
+  const folderReturnFinalPresentation = await run(`
+    const { folder } = window.__folderCloseReturnTest;
+    const icon = folder.querySelector(':scope > .tab-group-label-container .tab-group-folder-icon svg');
+    return {
+      motion: folder.hasAttribute('folder-open-tabs-return-motion'),
+      iconState: icon?.getAttribute('state'),
+    };
+  `);
+  assert.equal(folderReturnFinalPresentation.motion, false, 'Folder return presentation cleans up');
+  assert.equal(folderReturnFinalPresentation.iconState, 'close', 'Folder icon returns to the closed appearance');
   assert(
     await run('return window.__folderCloseReturnTest.retainedTab.isConnected;'),
     'Other folder tabs remain connected'

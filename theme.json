@@ -1,9 +1,9 @@
 {
   "id": "folder-open-tabs",
   "name": "Folder Open Tabs",
-  "description": "閉じたフォルダーのロード済みタブを表示し、選択・ページ切替・タブ終了を滑らかにします。",
+  "description": "閉じたフォルダーのロード済みタブを表示し、選択・ページ切替・タブ終了・ホバー表示を滑らかにします。",
   "author": "個人用Mod",
-  "version": "0.4.30",
+  "version": "0.4.69",
   "createdAt": "2026-09-20",
   "updatedAt": "2026-09-22",
   "tags": [

@@ -6,6 +6,9 @@
 :root {
   --folder-open-tabs-toggle-duration: 280ms;
   --folder-open-tabs-toggle-easing: ease-in-out;
+  --folder-open-tabs-download-arrow-duration: 520ms;
+  --folder-open-tabs-download-tray-wiggle-duration: 280ms;
+  --folder-open-tabs-download-animation-easing: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @property --folder-open-tabs-unloaded-height {
@@ -35,6 +38,133 @@
 .zen-current-workspace-indicator::before {
   border-radius: 13px !important;
   corner-shape: round !important;
+}
+
+/* Rotate the new-tab and download icons while the pointer hovers their buttons. */
+#tabbrowser-tabs :is(#tabs-newtab-button, #vertical-tabs-newtab-button, #new-tab-button) .toolbarbutton-icon,
+#zen-create-new-button .toolbarbutton-icon {
+  rotate: 0deg !important;
+  transform-origin: center center !important;
+  transition-property: rotate !important;
+  transition-duration: var(--folder-open-tabs-toggle-duration) !important;
+  transition-timing-function: var(--folder-open-tabs-toggle-easing) !important;
+  will-change: rotate;
+}
+
+#zen-create-new-button .toolbarbutton-icon {
+  /* Prevent Zen's click state from adding the native 45deg plus-to-close turn. */
+  transform: none !important;
+}
+
+#tabbrowser-tabs :is(#tabs-newtab-button, #vertical-tabs-newtab-button, #new-tab-button):hover .toolbarbutton-icon,
+#zen-create-new-button:hover .toolbarbutton-icon {
+  rotate: 90deg !important;
+}
+
+#tabbrowser-tabs :is(#tabs-newtab-button, #vertical-tabs-newtab-button, #new-tab-button)[folder-open-tabs-new-tab-focused] .toolbarbutton-icon,
+#zen-create-new-button[folder-open-tabs-new-tab-focused] .toolbarbutton-icon,
+#zen-create-new-button .toolbarbutton-icon[folder-open-tabs-new-tab-focused] {
+  rotate: 90deg !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #tabbrowser-tabs :is(#tabs-newtab-button, #vertical-tabs-newtab-button, #new-tab-button) .toolbarbutton-icon,
+  #zen-create-new-button .toolbarbutton-icon {
+    transition-duration: 0s !important;
+  }
+}
+
+/* Keep the download tray still while the arrow redraws, then give it a small completion wiggle. */
+#downloads-button #downloads-indicator-anchor {
+  position: relative !important;
+}
+
+#downloads-button [folder-open-tabs-download-native-icon] {
+  visibility: hidden !important;
+}
+
+#downloads-button .folder-open-tabs-download-icon {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 16px !important;
+  height: 16px !important;
+  overflow: visible !important;
+  pointer-events: none !important;
+  color: var(--toolbarbutton-icon-fill, currentColor) !important;
+}
+
+@keyframes folder-open-tabs-download-arrow-shaft-reveal {
+  0%, 12% {
+    opacity: 0;
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 1;
+  }
+  56%, 100% {
+    opacity: 1;
+    stroke-dasharray: 1 0;
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes folder-open-tabs-download-arrow-head-reveal {
+  0%, 56% {
+    opacity: 0;
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 1;
+  }
+  100% {
+    opacity: 1;
+    stroke-dasharray: 1 0;
+    stroke-dashoffset: 0;
+  }
+}
+
+#downloads-button .folder-open-tabs-download-tray {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+#downloads-button:hover .folder-open-tabs-download-arrow-shaft {
+  animation: folder-open-tabs-download-arrow-shaft-reveal var(--folder-open-tabs-download-arrow-duration) var(--folder-open-tabs-download-animation-easing) both;
+}
+
+#downloads-button:hover .folder-open-tabs-download-arrow-head {
+  animation: folder-open-tabs-download-arrow-head-reveal var(--folder-open-tabs-download-arrow-duration) var(--folder-open-tabs-download-animation-easing) both;
+}
+
+@keyframes folder-open-tabs-download-tray-wiggle {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-0.45px);
+  }
+  40% {
+    transform: translateX(0.45px);
+  }
+  60% {
+    transform: translateX(-0.3px);
+  }
+  80% {
+    transform: translateX(0.2px);
+  }
+}
+
+#downloads-button:hover .folder-open-tabs-download-tray {
+  animation: folder-open-tabs-download-tray-wiggle var(--folder-open-tabs-download-tray-wiggle-duration) var(--folder-open-tabs-download-animation-easing) var(--folder-open-tabs-download-arrow-duration) both;
+}
+
+#downloads-button[progress] .folder-open-tabs-download-icon,
+#downloads-button[animate][notification] .folder-open-tabs-download-icon {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #downloads-button:hover .folder-open-tabs-download-arrow-shaft,
+  #downloads-button:hover .folder-open-tabs-download-arrow-head,
+  #downloads-button:hover .folder-open-tabs-download-tray {
+    animation: none !important;
+  }
 }
 
 /* Sine's companion script moves this shared highlight between selected tabs. */

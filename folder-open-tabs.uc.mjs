@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Folder Open Tabs Motion
 // @description  Adds smooth selection, page-depth, and tab close motion to Zen.
-// @version      0.4.30
+// @version      0.4.69
 // @lastUpdated  2026-09-22
 // ==/UserScript==
 
@@ -17,10 +17,22 @@
   const FOLDER_RETURN_EFFECT_CLASS = "folder-open-tabs-folder-return-effect";
   const FOLDER_RETURN_SURFACE_CLASS = "folder-open-tabs-folder-return-surface";
   const FOLDER_RETURN_TARGET_CLASS = "folder-open-tabs-folder-return-target";
+  const FOLDER_RETURN_SPARK_EFFECT_CLASS = "folder-open-tabs-folder-return-spark-effect";
+  const FOLDER_RETURN_SPARK_PARTICLE_CLASS = "folder-open-tabs-folder-return-spark";
+  const FOLDER_RETURN_MOTION_ATTRIBUTE = "folder-open-tabs-return-motion";
   const OPEN_UNLOAD_EFFECT_CLASS = "folder-open-tabs-open-unload-effect";
   const OPEN_UNLOAD_RING_CLASS = "folder-open-tabs-open-unload-ring";
   const CONTROL_BURST_EFFECT_CLASS = "folder-open-tabs-control-burst-effect";
   const CONTROL_BURST_PARTICLE_CLASS = "folder-open-tabs-control-burst-particle";
+  const DOWNLOADS_CUSTOM_ICON_CLASS = "folder-open-tabs-download-icon";
+  const DOWNLOADS_ARROW_CLASS = "folder-open-tabs-download-arrow";
+  const DOWNLOADS_ARROW_SHAFT_CLASS = "folder-open-tabs-download-arrow-shaft";
+  const DOWNLOADS_ARROW_HEAD_CLASS = "folder-open-tabs-download-arrow-head";
+  const DOWNLOADS_TRAY_CLASS = "folder-open-tabs-download-tray";
+  const DOWNLOADS_NATIVE_ICON_ATTRIBUTE = "folder-open-tabs-download-native-icon";
+  const NEW_TAB_BUTTON_SELECTOR =
+    "#tabs-newtab-button, #vertical-tabs-newtab-button, #new-tab-button, #zen-create-new-button";
+  const NEW_TAB_FOCUSED_ATTRIBUTE = "folder-open-tabs-new-tab-focused";
   const FOLDER_TOGGLE_DURATION = 280;
   const FOLDER_TOGGLE_EASING = "ease-in-out";
   const FOLDER_COLLAPSED_GAP = 4;
@@ -28,13 +40,15 @@
   const DURATION = 360;
   const PAGE_DEPTH_DURATION = 160;
   const PAGE_DEPTH_START_SCALE = 0.985;
-  const TAB_CLOSE_PARTICLE_DURATION = 420;
-  const TAB_CLOSE_MAX_DELAY = 50;
+  const TAB_CLOSE_PARTICLE_DURATION = 260;
+  const TAB_CLOSE_MAX_DELAY = 220;
   const TAB_CLOSE_PARTICLE_COUNT = 60;
   const TAB_CLOSE_LAYOUT_DELAY = 90;
   const TAB_CLOSE_LAYOUT_DURATION = 160;
   const FOLDER_RETURN_DURATION = 560;
   const FOLDER_RETURN_FRAME_COUNT = 35;
+  const FOLDER_RETURN_SPARK_DURATION = 320;
+  const FOLDER_RETURN_SPARK_COUNT = 10;
   const OPEN_UNLOAD_DURATION = 320;
   const OPEN_UNLOAD_SHAKE_DURATION = 190;
   const OPEN_UNLOAD_FRAME_COUNT = 21;
@@ -44,6 +58,7 @@
   const STABLE_FRAME_LIMIT = 8;
   const POSITION_EPSILON = 0.1;
   const XHTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+  const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
   class SelectionHighlightController {
     constructor(browserWindow) {
@@ -56,6 +71,7 @@
       this.closeLayoutMotions = new Set();
       this.folderFollowerMotions = new Set();
       this.folderExpandMotions = new Map();
+      this.folderReturnMotions = new Map();
       this.selectionSyncFrame = 0;
       this.selectionSyncAttempts = 0;
       this.selectionSyncAnimate = false;
@@ -72,13 +88,21 @@
       (this.document.getElementById("TabsToolbar") ?? this.document.documentElement).prepend(this.highlight);
 
       this.onTabSelect = event => {
+        this.clearNewTabFocusState?.();
         this.moveTo(event.target, true);
         this.animatePageDepth(event.target);
         this.scheduleSelectionSync(true);
       };
       this.onTabClose = event => {
-        this.returnTabToFolder(event.target);
-        this.dissolveTabUpward(event.target);
+        const closingTab = event.target;
+        if (
+          closingTab === this.currentTab ||
+          closingTab?.hasAttribute(TARGET_ATTRIBUTE)
+        ) {
+          this.hide();
+        }
+        this.returnTabToFolder(closingTab);
+        this.dissolveTabLeftward(closingTab);
         this.scheduleSelectionSync(true);
       };
       this.onLayoutChange = () => {
@@ -123,6 +147,7 @@
           this.clearCloseLayoutMotions();
           this.clearFolderFollowerMotions();
           this.clearFolderExpandMotions();
+          this.clearFolderReturnMotions();
           this.hide();
         } else {
           this.moveTo(this.window.gBrowser.selectedTab, false);
@@ -155,7 +180,157 @@
       });
       this.restoreFolderAnimationTiming = this.installFolderAnimationTiming();
       this.restoreExplicitUnloadAnimation = this.installExplicitUnloadAnimation();
+      this.restoreDownloadsIconAnimation = this.installDownloadsIconAnimation();
+      this.restoreNewTabFocusState = this.installNewTabFocusState();
       this.moveTo(this.window.gBrowser.selectedTab, false);
+    }
+
+    installNewTabFocusState() {
+      const clearButtonState = button => {
+        button.removeAttribute(NEW_TAB_FOCUSED_ATTRIBUTE);
+        button.querySelectorAll?.(".toolbarbutton-icon").forEach(icon => {
+          icon.removeAttribute(NEW_TAB_FOCUSED_ATTRIBUTE);
+        });
+      };
+      const clearFocusedState = () => {
+        this.document.querySelectorAll(NEW_TAB_BUTTON_SELECTOR).forEach(button => {
+          clearButtonState(button);
+        });
+      };
+      const setFocusedState = button => {
+        clearFocusedState();
+        button.setAttribute(NEW_TAB_FOCUSED_ATTRIBUTE, "true");
+        button.querySelectorAll?.(".toolbarbutton-icon").forEach(icon => {
+          icon.setAttribute(NEW_TAB_FOCUSED_ATTRIBUTE, "true");
+        });
+      };
+      const findButton = event => {
+        const composedButton = event.composedPath?.().find(target =>
+          target?.matches?.(NEW_TAB_BUTTON_SELECTOR)
+        );
+        return composedButton ?? event.target?.closest?.(NEW_TAB_BUTTON_SELECTOR);
+      };
+      const onFocusIn = event => {
+        const button = findButton(event);
+        if (!button) {
+          return;
+        }
+        setFocusedState(button);
+      };
+      const onFocusOut = event => {
+        const button = findButton(event);
+        const relatedTarget = event.relatedTarget;
+        if (!button || button.id === "zen-create-new-button") {
+          return;
+        }
+        if (relatedTarget instanceof this.window.Node && button.contains(relatedTarget)) {
+          return;
+        }
+        clearButtonState(button);
+      };
+      const onClick = event => {
+        const button = findButton(event);
+        clearFocusedState();
+        if (button) {
+          setFocusedState(button);
+        }
+      };
+      const onPointerDown = event => {
+        const button = findButton(event);
+        if (button) {
+          setFocusedState(button);
+        } else {
+          clearFocusedState();
+        }
+      };
+      const onWindowBlur = () => {
+        clearFocusedState();
+      };
+
+      clearFocusedState();
+      this.clearNewTabFocusState = clearFocusedState;
+      this.document.addEventListener("focusin", onFocusIn, true);
+      this.document.addEventListener("focusout", onFocusOut, true);
+      this.document.addEventListener("click", onClick, true);
+      this.document.addEventListener("pointerdown", onPointerDown, true);
+      this.document.addEventListener("mousedown", onPointerDown, true);
+      this.window.addEventListener("pointerdown", onPointerDown, true);
+      this.window.addEventListener("mousedown", onPointerDown, true);
+      this.window.addEventListener("blur", onWindowBlur);
+      return () => {
+        this.document.removeEventListener("focusin", onFocusIn, true);
+        this.document.removeEventListener("focusout", onFocusOut, true);
+        this.document.removeEventListener("click", onClick, true);
+        this.document.removeEventListener("pointerdown", onPointerDown, true);
+        this.document.removeEventListener("mousedown", onPointerDown, true);
+        this.window.removeEventListener("pointerdown", onPointerDown, true);
+        this.window.removeEventListener("mousedown", onPointerDown, true);
+        this.window.removeEventListener("blur", onWindowBlur);
+        clearFocusedState();
+        this.clearNewTabFocusState = null;
+      };
+    }
+
+    installDownloadsIconAnimation() {
+      const button = this.document.getElementById("downloads-button");
+      const nativeIcon = button?.querySelector("#downloads-indicator-icon") ??
+        button?.querySelector(":scope > .toolbarbutton-icon");
+      const anchor = nativeIcon?.parentElement;
+      if (!button || !nativeIcon || !anchor) {
+        return () => {};
+      }
+
+      const svg = this.document.createElementNS(SVG_NAMESPACE, "svg");
+      svg.setAttribute("class", DOWNLOADS_CUSTOM_ICON_CLASS);
+      svg.setAttribute("viewBox", "0 0 16 16");
+      svg.setAttribute("aria-hidden", "true");
+      svg.setAttribute("focusable", "false");
+
+      const tray = this.document.createElementNS(SVG_NAMESPACE, "path");
+      tray.setAttribute("class", DOWNLOADS_TRAY_CLASS);
+      tray.setAttribute(
+        "d",
+        "M2.5 10.5v2.3q0 .45.45.45h10.1q.45 0 .45-.45v-2.3"
+      );
+      tray.setAttribute("fill", "none");
+      tray.setAttribute("stroke", "currentColor");
+      tray.setAttribute("stroke-width", "1.25");
+      tray.setAttribute("stroke-linecap", "round");
+      tray.setAttribute("stroke-linejoin", "round");
+
+      const arrowParts = [
+        ["M8 1.75v7.5", DOWNLOADS_ARROW_SHAFT_CLASS],
+        ["M5 6.25 8 9.25", DOWNLOADS_ARROW_HEAD_CLASS],
+        ["M11 6.25 8 9.25", DOWNLOADS_ARROW_HEAD_CLASS],
+      ].map(([pathData, partClass]) => {
+        const part = this.document.createElementNS(SVG_NAMESPACE, "path");
+        part.setAttribute(
+          "class",
+          `${DOWNLOADS_ARROW_CLASS} ${partClass}`
+        );
+        part.setAttribute("d", pathData);
+        part.setAttribute("pathLength", "1");
+        part.setAttribute("fill", "none");
+        part.setAttribute("stroke", "currentColor");
+        part.setAttribute("stroke-width", "1.25");
+        part.setAttribute("stroke-linecap", "round");
+        part.setAttribute("stroke-linejoin", "round");
+        return part;
+      });
+
+      svg.append(tray, ...arrowParts);
+      anchor.appendChild(svg);
+      const hadNativeAttribute = nativeIcon.hasAttribute(
+        DOWNLOADS_NATIVE_ICON_ATTRIBUTE
+      );
+      nativeIcon.setAttribute(DOWNLOADS_NATIVE_ICON_ATTRIBUTE, "true");
+
+      return () => {
+        if (!hadNativeAttribute) {
+          nativeIcon.removeAttribute(DOWNLOADS_NATIVE_ICON_ATTRIBUTE);
+        }
+        svg.remove();
+      };
     }
 
     installExplicitUnloadAnimation() {
@@ -172,28 +347,45 @@
       const controller = this;
       const wrapped = function (tabs, ...args) {
         const tabList = Array.isArray(tabs) ? tabs : [tabs].filter(Boolean);
-        const motions = tabList
-          .flatMap(tab => [
-            controller.returnTabToFolder(tab),
-            controller.absorbOutlineIntoIcon(tab),
-          ])
+        const returnSnapshots = tabList
+          .map(tab => controller.captureFolderReturnSnapshot(tab))
           .filter(Boolean);
+        const motions = tabList
+          .map(tab => controller.absorbOutlineIntoIcon(tab))
+          .filter(Boolean);
+        let returnTimer = null;
+        const cleanup = () => {
+          if (returnTimer !== null) {
+            controller.window.clearTimeout(returnTimer);
+            returnTimer = null;
+          }
+          motions.forEach(motion => motion.cleanup());
+        };
         let result;
         try {
           result = original.call(this, tabs, ...args);
         } catch (error) {
-          motions.forEach(motion => motion.cleanup());
+          cleanup();
           throw error;
         }
+        returnTimer = controller.window.setTimeout(() => {
+          returnTimer = null;
+          returnSnapshots.forEach(snapshot => {
+            const motion = controller.returnTabToFolder(snapshot.tab, snapshot);
+            if (motion) {
+              motions.push(motion);
+            }
+          });
+        }, 0);
         return Promise.resolve(result).then(
           successful => {
             if (!successful) {
-              motions.forEach(motion => motion.cleanup());
+              cleanup();
             }
             return successful;
           },
           error => {
-            motions.forEach(motion => motion.cleanup());
+            cleanup();
             throw error;
           }
         );
@@ -644,6 +836,94 @@
       this.folderExpandMotions.clear();
     }
 
+    startFolderReturnPresentation(folder, tab) {
+      if (
+        this.reduceMotion.matches ||
+        !folder?.isConnected ||
+        !folder.matches("zen-folder[collapsed]")
+      ) {
+        return null;
+      }
+
+      let state = this.folderReturnMotions.get(folder);
+      if (!state) {
+        const folderIcon = folder.querySelector(
+          ":scope > .tab-group-label-container .tab-group-folder-icon svg"
+        );
+        const originalIconState = folderIcon?.getAttribute("state") ?? null;
+        const originalIconActive = folderIcon?.getAttribute("active") ?? null;
+
+        state = {
+          folder,
+          folderIcon,
+          originalIconState,
+          originalIconActive,
+          count: 0,
+          cleaned: false,
+        };
+        this.folderReturnMotions.set(folder, state);
+
+        folder.setAttribute(FOLDER_RETURN_MOTION_ATTRIBUTE, "true");
+        if (folderIcon) {
+          folderIcon.setAttribute("state", "open");
+          folderIcon.setAttribute("active", "false");
+        }
+      }
+
+      state.count += 1;
+      let released = false;
+      const cleanup = (completed = false) => {
+        if (released || state.cleaned) {
+          return;
+        }
+        released = true;
+        state.count -= 1;
+        if (state.count > 0) {
+          return;
+        }
+        this.finishFolderReturnPresentation(state, completed);
+      };
+      return { cleanup };
+    }
+
+    finishFolderReturnPresentation(state, completed = false) {
+      if (!state || state.cleaned) {
+        return;
+      }
+      state.cleaned = true;
+      this.folderReturnMotions.delete(state.folder);
+
+      const folder = state.folder;
+      const isStillCollapsed = folder.isConnected && folder.collapsed;
+      if (folder.isConnected) {
+        folder.removeAttribute(FOLDER_RETURN_MOTION_ATTRIBUTE);
+      }
+      if (!isStillCollapsed) {
+        return;
+      }
+      if (state.folderIcon?.isConnected) {
+        if (state.originalIconState == null) {
+          state.folderIcon.removeAttribute("state");
+        } else if (state.folderIcon.getAttribute("state") === "open") {
+          state.folderIcon.setAttribute("state", state.originalIconState);
+        }
+        if (state.originalIconActive == null) {
+          state.folderIcon.removeAttribute("active");
+        } else if (state.folderIcon.getAttribute("active") === "false") {
+          state.folderIcon.setAttribute("active", state.originalIconActive);
+        }
+      }
+      if (completed) {
+        this.burstFolderReturnCompletion(folder);
+      }
+    }
+
+    clearFolderReturnMotions() {
+      for (const state of [...this.folderReturnMotions.values()]) {
+        this.finishFolderReturnPresentation(state);
+      }
+    }
+
     retimeFolderAnimations(group, animationsBefore) {
       if (!group?.getAnimations) {
         return;
@@ -993,7 +1273,7 @@
       return { cleanup };
     }
 
-    returnTabToFolder(tab) {
+    captureFolderReturnSnapshot(tab) {
       const folder = tab?.closest?.("zen-folder[collapsed]");
       if (
         this.reduceMotion.matches ||
@@ -1004,23 +1284,121 @@
         return null;
       }
 
+      const copyRect = rect => rect && ({
+        top: rect.top,
+        left: rect.left,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      });
       const folderLabel = folder.querySelector(":scope > .tab-group-label-container");
       const folderIcon = folderLabel?.querySelector(".tab-group-folder-icon");
-      const tabRect = tab.getBoundingClientRect();
-      const folderLabelRect = folderLabel?.getBoundingClientRect();
-      const folderIconRect = folderIcon?.getBoundingClientRect();
+      const tabRect = copyRect(tab.getBoundingClientRect());
+      const folderLabelRect = copyRect(folderLabel?.getBoundingClientRect());
+      const folderIconRect = copyRect(folderIcon?.getBoundingClientRect());
       const destinationRect = folderIconRect?.width > 0 && folderIconRect?.height > 0
         ? folderIconRect
         : folderLabelRect;
       if (
+        !tabRect ||
         tabRect.width <= 0 ||
         tabRect.height <= 0 ||
+        !folderLabelRect ||
         !destinationRect ||
         destinationRect.width <= 0 ||
         destinationRect.height <= 0
       ) {
         return null;
       }
+
+      const backgroundSource =
+        tab === this.currentTab && !this.highlight.hidden
+          ? this.highlight
+          : tab.querySelector(":scope > .tab-stack > .tab-background");
+      const backgroundRect = copyRect(backgroundSource?.getBoundingClientRect());
+      const backgroundComputedStyle = backgroundSource
+        ? this.window.getComputedStyle(backgroundSource)
+        : null;
+      const backgroundStyle = backgroundComputedStyle && {
+        background: backgroundComputedStyle.background,
+        border: backgroundComputedStyle.border,
+        borderRadius: backgroundComputedStyle.borderRadius,
+        boxShadow: backgroundComputedStyle.boxShadow,
+        colorScheme: backgroundComputedStyle.colorScheme,
+        outline: backgroundComputedStyle.outline,
+        outlineOffset: backgroundComputedStyle.outlineOffset,
+        opacity: backgroundComputedStyle.opacity,
+        cornerShape: backgroundComputedStyle.getPropertyValue("corner-shape"),
+      };
+      const labelSource = tab.querySelector(".tab-label");
+      const labelRect = copyRect(labelSource?.getBoundingClientRect());
+      const labelComputedStyle = labelSource
+        ? this.window.getComputedStyle(labelSource)
+        : null;
+      const labelStyle = labelComputedStyle && {
+        color: labelComputedStyle.color,
+        font: labelComputedStyle.font,
+        lineHeight: labelComputedStyle.lineHeight,
+        opacity: labelComputedStyle.opacity,
+        textAlign: labelComputedStyle.textAlign,
+        textShadow: labelComputedStyle.textShadow,
+      };
+      const iconSource = [...tab.querySelectorAll(".tab-icon-image, .tab-throbber")]
+        .find(element => {
+          const rect = element.getBoundingClientRect();
+          const style = this.window.getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden";
+        });
+      const iconRect = copyRect(iconSource?.getBoundingClientRect());
+      const iconComputedStyle = iconSource
+        ? this.window.getComputedStyle(iconSource)
+        : null;
+      const iconStyle = iconComputedStyle && {
+        backgroundColor: iconComputedStyle.backgroundColor,
+        backgroundImage: iconComputedStyle.backgroundImage,
+        listStyleImage: iconComputedStyle.getPropertyValue("list-style-image"),
+        borderRadius: iconComputedStyle.borderRadius,
+        opacity: iconComputedStyle.opacity,
+      };
+      return {
+        tab,
+        folder,
+        tabRect,
+        folderLabelRect,
+        destinationRect,
+        backgroundRect,
+        backgroundStyle,
+        labelRect,
+        labelStyle,
+        labelText: labelSource?.textContent ?? "",
+        iconRect,
+        iconStyle,
+        tabColor: this.window.getComputedStyle(tab).color,
+      };
+    }
+
+    returnTabToFolder(tab, snapshot = null) {
+      snapshot ??= this.captureFolderReturnSnapshot(tab);
+      if (!snapshot || !snapshot.tab?.isConnected || !snapshot.folder?.isConnected) {
+        return null;
+      }
+
+      const {
+        folder,
+        tabRect,
+        folderLabelRect,
+        destinationRect,
+        backgroundRect,
+        backgroundStyle,
+        labelRect,
+        labelStyle,
+        labelText,
+        iconRect,
+        iconStyle,
+        tabColor,
+      } = snapshot;
+      const folderPresentation = this.startFolderReturnPresentation(folder, tab);
       const effect = this.document.createElementNS(XHTML_NAMESPACE, "div");
       effect.className = FOLDER_RETURN_EFFECT_CLASS;
       effect.setAttribute("aria-hidden", "true");
@@ -1039,14 +1417,6 @@
         zIndex: "2147483646",
       });
 
-      const tabBackground = tab.querySelector(":scope > .tab-stack > .tab-background");
-      const selectedBackground =
-        tab === this.currentTab && !this.highlight.hidden ? this.highlight : null;
-      const backgroundSource = selectedBackground ?? tabBackground;
-      const backgroundRect = backgroundSource?.getBoundingClientRect();
-      const backgroundStyle = backgroundSource
-        ? this.window.getComputedStyle(backgroundSource)
-        : null;
       if (backgroundRect && backgroundStyle) {
         const surface = this.document.createElementNS(XHTML_NAMESPACE, "div");
         surface.className = FOLDER_RETURN_SURFACE_CLASS;
@@ -1068,17 +1438,14 @@
         });
         surface.style.setProperty(
           "corner-shape",
-          backgroundStyle.getPropertyValue("corner-shape") || "round"
+          backgroundStyle.cornerShape || "round"
         );
         effect.appendChild(surface);
       }
 
-      const labelSource = tab.querySelector(".tab-label");
-      const labelRect = labelSource?.getBoundingClientRect();
-      if (labelSource && labelRect?.width > 0 && labelRect?.height > 0) {
-        const labelStyle = this.window.getComputedStyle(labelSource);
+      if (labelRect && labelStyle && labelRect.width > 0 && labelRect.height > 0) {
         const label = this.document.createElementNS(XHTML_NAMESPACE, "span");
-        label.textContent = labelSource.textContent;
+        label.textContent = labelText;
         Object.assign(label.style, {
           position: "absolute",
           top: `${labelRect.top - tabRect.top}px`,
@@ -1098,17 +1465,9 @@
         effect.appendChild(label);
       }
 
-      const iconSource = [...tab.querySelectorAll(".tab-icon-image, .tab-throbber")]
-        .find(element => {
-          const rect = element.getBoundingClientRect();
-          const style = this.window.getComputedStyle(element);
-          return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden";
-        });
-      const iconRect = iconSource?.getBoundingClientRect();
-      if (iconSource && iconRect) {
-        const iconStyle = this.window.getComputedStyle(iconSource);
+      if (iconRect && iconStyle) {
         const icon = this.document.createElementNS(XHTML_NAMESPACE, "span");
-        const listImage = iconStyle.getPropertyValue("list-style-image");
+        const listImage = iconStyle.listStyleImage;
         Object.assign(icon.style, {
           position: "absolute",
           top: `${iconRect.top - tabRect.top}px`,
@@ -1131,7 +1490,6 @@
       const receiver = this.document.createElementNS(XHTML_NAMESPACE, "div");
       receiver.className = FOLDER_RETURN_TARGET_CLASS;
       receiver.setAttribute("aria-hidden", "true");
-      const tabColor = this.window.getComputedStyle(tab).color;
       Object.assign(receiver.style, {
         position: "fixed",
         top: `${folderLabelRect.bottom - 3}px`,
@@ -1153,8 +1511,7 @@
         destinationRect.left + destinationRect.width / 2 - (tabRect.left + tabRect.width / 2);
       const destinationY =
         destinationRect.top + destinationRect.height / 2 - (tabRect.top + tabRect.height / 2);
-      const smootherStep = progress =>
-        progress * progress * progress * (progress * (progress * 6 - 15) + 10);
+      const smootherStep = progress => progress * progress * (3 - 2 * progress);
       const cubicPoint = (start, control1, control2, end, progress) => {
         const inverse = 1 - progress;
         return inverse ** 3 * start +
@@ -1217,7 +1574,7 @@
       this.closeEffects.add(effect);
       let cleanupTimer;
       let cleaned = false;
-      const cleanup = () => {
+      const cleanup = (completed = false) => {
         if (cleaned) {
           return;
         }
@@ -1225,13 +1582,131 @@
         this.window.clearTimeout(cleanupTimer);
         returnAnimation.cancel();
         receiverAnimation.cancel();
+        folderPresentation?.cleanup(completed);
         this.closeEffects.delete(effect);
         receiver.remove();
         effect.remove();
       };
       effect.__folderOpenTabsCleanup = cleanup;
       cleanupTimer = this.window.setTimeout(cleanup, FOLDER_RETURN_DURATION + 140);
-      Promise.allSettled([returnAnimation.finished, receiverAnimation.finished]).then(cleanup);
+      Promise.allSettled([returnAnimation.finished, receiverAnimation.finished]).then(() =>
+        cleanup(true)
+      );
+      return { cleanup };
+    }
+
+    burstFolderReturnCompletion(folder) {
+      if (this.reduceMotion.matches || !folder?.isConnected) {
+        return null;
+      }
+      const icon = folder.querySelector(
+        ":scope > .tab-group-label-container .tab-group-folder-icon"
+      );
+      const label = folder.querySelector(":scope > .tab-group-label-container");
+      const iconRect = icon?.getBoundingClientRect();
+      const labelRect = label?.getBoundingClientRect();
+      const sourceRect = iconRect?.width > 0 && iconRect?.height > 0
+        ? iconRect
+        : labelRect;
+      if (!sourceRect || sourceRect.width <= 0 || sourceRect.height <= 0) {
+        return null;
+      }
+
+      const vectors = [
+        { x: -15, y: -5, width: 5.4, height: 2.2, rotation: -52 },
+        { x: -11, y: -14, width: 4.2, height: 2.8, rotation: 34 },
+        { x: -4, y: -18, width: 5.1, height: 2.0, rotation: -18 },
+        { x: 4, y: -17, width: 3.8, height: 2.6, rotation: 46 },
+        { x: 13, y: -10, width: 5.7, height: 2.2, rotation: -28 },
+        { x: 17, y: 1, width: 4.2, height: 2.4, rotation: 16 },
+        { x: 13, y: 12, width: 5.1, height: 2.0, rotation: 61 },
+        { x: 4, y: 17, width: 4.0, height: 2.7, rotation: -39 },
+        { x: -7, y: 15, width: 5.7, height: 2.2, rotation: 25 },
+        { x: -17, y: 7, width: 4.4, height: 2.5, rotation: -66 },
+      ].slice(0, FOLDER_RETURN_SPARK_COUNT);
+      const effect = this.document.createElementNS(XHTML_NAMESPACE, "div");
+      effect.className = FOLDER_RETURN_SPARK_EFFECT_CLASS;
+      effect.setAttribute("aria-hidden", "true");
+      effect.dataset.renderer = "folder-return-completion-spark";
+      Object.assign(effect.style, {
+        position: "fixed",
+        left: `${sourceRect.left + sourceRect.width / 2}px`,
+        top: `${sourceRect.top + sourceRect.height / 2}px`,
+        width: "0px",
+        height: "0px",
+        overflow: "visible",
+        pointerEvents: "none",
+        zIndex: "2147483647",
+      });
+
+      const animations = vectors.map((vector, index) => {
+        const particle = this.document.createElementNS(XHTML_NAMESPACE, "span");
+        particle.className = FOLDER_RETURN_SPARK_PARTICLE_CLASS;
+        Object.assign(particle.style, {
+          position: "absolute",
+          left: `${-vector.width / 2}px`,
+          top: `${-vector.height / 2}px`,
+          width: `${vector.width}px`,
+          height: `${vector.height}px`,
+          background: "rgba(255, 255, 255, 0.98)",
+          borderRadius: "0.5px",
+          boxShadow: "0 0 3px rgba(255, 255, 255, 0.72)",
+          pointerEvents: "none",
+          transformOrigin: "center center",
+          willChange: "transform, opacity",
+        });
+        effect.appendChild(particle);
+        const animation = particle.animate(
+          [
+            {
+              opacity: 0,
+              transform: "translate3d(0, 0, 0) rotate(-12deg) scale(0.62, 0.62)",
+            },
+            {
+              opacity: 1,
+              transform: `translate3d(${vector.x * 0.28}px, ${vector.y * 0.28}px, 0) rotate(${vector.rotation * 0.25}deg) scale(1, 0.84)`,
+              offset: 0.2,
+            },
+            {
+              opacity: 0.96,
+              transform: `translate3d(${vector.x * 0.72}px, ${vector.y * 0.72 + 2}px, 0) rotate(${vector.rotation * 0.72}deg) scale(0.86, 1.08)`,
+              offset: 0.62,
+            },
+            {
+              opacity: 0,
+              transform: `translate3d(${vector.x}px, ${vector.y + 7}px, 0) rotate(${vector.rotation}deg) scale(0.74, 0.74)`,
+            },
+          ],
+          {
+            duration: FOLDER_RETURN_SPARK_DURATION + (index % 3) * 18,
+            easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+            fill: "both",
+          }
+        );
+        animation.id = `folder-open-tabs-folder-return-spark-${index}`;
+        return animation;
+      });
+      this.document.documentElement.appendChild(effect);
+      this.closeEffects.add(effect);
+
+      let cleanupTimer;
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) {
+          return;
+        }
+        cleaned = true;
+        this.window.clearTimeout(cleanupTimer);
+        animations.forEach(animation => animation.cancel());
+        this.closeEffects.delete(effect);
+        effect.remove();
+      };
+      effect.__folderOpenTabsCleanup = cleanup;
+      cleanupTimer = this.window.setTimeout(
+        cleanup,
+        FOLDER_RETURN_SPARK_DURATION + 140
+      );
+      Promise.allSettled(animations.map(animation => animation.finished)).then(cleanup);
       return { cleanup };
     }
 
@@ -1482,7 +1957,7 @@
       controller.frame = this.window.requestAnimationFrame(track);
     }
 
-    dissolveTabUpward(tab) {
+    dissolveTabLeftward(tab) {
       if (
         this.reduceMotion.matches ||
         !tab ||
@@ -1537,10 +2012,12 @@
         );
         effect.appendChild(particle);
 
-        const verticalProgress = y / rect.height;
-        const delay = (1 - verticalProgress) * TAB_CLOSE_MAX_DELAY + Math.random() * 18;
-        const driftX = -2.5 + Math.random() * 5;
-        const driftY = -(7 + Math.random() * 9);
+        // Dissolve from the close button on the right toward the left without making
+        // the whole particle field appear to flow in one direction.
+        const horizontalProgress = x / rect.width;
+        const delay = (1 - horizontalProgress) * TAB_CLOSE_MAX_DELAY;
+        const driftX = -(1.5 + Math.random() * 2.5);
+        const driftY = -(1.5 + Math.random() * 2.5);
         const rotation = -10 + Math.random() * 20;
         const animation = particle.animate(
           [
@@ -1761,11 +2238,14 @@
       this.animation?.cancel();
       this.restoreFolderAnimationTiming?.();
       this.restoreExplicitUnloadAnimation?.();
+      this.restoreDownloadsIconAnimation?.();
+      this.restoreNewTabFocusState?.();
       this.cancelPageDepth();
       this.clearCloseEffects();
       this.clearCloseLayoutMotions();
       this.clearFolderFollowerMotions();
       this.clearFolderExpandMotions();
+      this.clearFolderReturnMotions();
       if (this.selectionSyncFrame) {
         this.window.cancelAnimationFrame(this.selectionSyncFrame);
       }
