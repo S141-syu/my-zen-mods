@@ -1,6 +1,6 @@
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,9 +31,13 @@ await writeFile(path.join(profile, 'user.js'), [
 const browser = spawn('C:/Program Files/Zen Browser/zen.exe', [
   '--headless', '--no-remote', '--profile', profile, '--marionette',
   '--remote-allow-system-access',
-], { windowsHide: true, stdio: 'ignore' });
+], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+let startupError = '';
+browser.stderr.on('data', data => { startupError = (startupError + data.toString()).slice(-4000); });
+browser.on('error', error => { startupError = error.message; });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let socket;
+let quitBrowser;
 try {
   for (let i = 0; i < 60; i++) {
     socket = await new Promise(resolve => {
@@ -44,7 +48,7 @@ try {
     if (socket) break;
     await sleep(500);
   }
-  if (!socket) throw new Error('Isolated Zen Marionette did not start');
+  if (!socket) throw new Error(`Isolated Zen Marionette did not start; exit=${browser.exitCode}; ${startupError}`);
   let buffer = Buffer.alloc(0), id = 0;
   const waiting = new Map();
   socket.on('data', data => {
@@ -73,6 +77,7 @@ try {
     const payload = JSON.stringify([0, current, method, params]);
     socket.write(`${Buffer.byteLength(payload)}:${payload}`);
   });
+  quitBrowser = () => send('Marionette:Quit', { flags: ['eAttemptQuit'] });
   await send('WebDriver:NewSession', { capabilities: { alwaysMatch: { acceptInsecureCerts: false } } });
   await send('Marionette:SetContext', { value: 'chrome' });
   const run = async (script, args = []) => (await send('WebDriver:ExecuteScript', { script, args, newSandbox: false, sandbox: 'system' })).value;
@@ -94,14 +99,119 @@ try {
     return folder.getAnimations({ subtree: true }).map(animation => ({
       id: animation.id,
       name: animation.animationName,
+      target: animation.effect?.target?.className?.baseVal ?? animation.effect?.target?.className,
+      properties: Object.keys(animation.effect?.getKeyframes()[0] ?? {}),
       duration: animation.effect?.getTiming().duration,
       easing: animation.effect?.getTiming().easing,
       keyframeEasings: animation.effect?.getKeyframes().map(frame => frame.easing),
     }));
   `);
+  const folderOpenPresentationState = () => run(`
+    const folder = window.__folderTest.folder;
+    const effect = document.querySelector('.folder-open-tabs-folder-open-effect');
+    return {
+      effectCount: document.querySelectorAll('.folder-open-tabs-folder-open-effect').length,
+      iconCount: effect?.querySelectorAll('.folder-open-tabs-folder-open-icon').length ?? 0,
+      iconAssetCount: effect
+        ? [...effect.querySelectorAll('.folder-open-tabs-folder-open-icon')]
+            .filter(icon => icon.querySelector(':scope > .folder-open-tabs-folder-open-source'))
+            .length
+        : 0,
+      iconBackgroundColors: effect
+        ? [...effect.querySelectorAll('.folder-open-tabs-folder-open-icon')]
+            .map(icon => getComputedStyle(icon).backgroundColor)
+        : [],
+      iconFilters: effect
+        ? [...effect.querySelectorAll('.folder-open-tabs-folder-open-icon')]
+            .map(icon => getComputedStyle(icon).filter)
+        : [],
+      itemCount: folder.querySelectorAll('[folder-open-tabs-open-item]').length,
+      motion: folder.hasAttribute('folder-open-tabs-open-motion'),
+      rowAnimationCount: [...folder.querySelectorAll('[folder-open-tabs-open-item] > .tab-stack')]
+        .flatMap(item => item.getAnimations())
+        .filter(animation => animation.animationName === 'folder-open-tabs-folder-open-row-reveal')
+        .length,
+      rowDelays: [...folder.querySelectorAll('[folder-open-tabs-open-item] > .tab-stack')]
+        .flatMap(item => item.getAnimations()).filter(animation => animation.animationName === 'folder-open-tabs-folder-open-row-reveal')
+        .map(animation => animation.effect.getTiming().delay),
+      opacities: effect
+        ? [...effect.querySelectorAll('.folder-open-tabs-folder-open-icon')]
+            .map(icon => Number.parseFloat(icon.style.opacity))
+        : [],
+    };
+  `);
+  const folderClosePresentationState = () => run(`
+    const folder = window.__folderTest.folder;
+    const effects = [...document.querySelectorAll('.folder-open-tabs-folder-close-effect')];
+    const effect = effects.at(-1);
+    return {
+      effectCount: effects.length,
+      iconCount: effect?.querySelectorAll('.folder-open-tabs-folder-close-icon').length ?? 0,
+      iconAssetCount: effect
+        ? [...effect.querySelectorAll('.folder-open-tabs-folder-close-icon')]
+            .filter(icon => icon.querySelector(':scope > .folder-open-tabs-folder-open-source'))
+            .length
+        : 0,
+      iconBackgroundColors: effect
+        ? [...effect.querySelectorAll('.folder-open-tabs-folder-close-icon')]
+            .map(icon => getComputedStyle(icon).backgroundColor)
+        : [],
+      iconFilters: effect
+        ? [...effect.querySelectorAll('.folder-open-tabs-folder-close-icon')]
+            .map(icon => getComputedStyle(icon).filter)
+        : [],
+      itemCount: folder.querySelectorAll('[folder-open-tabs-close-item]').length,
+      motion: folder.hasAttribute('folder-open-tabs-close-motion'),
+      opacities: effect
+        ? [...effect.querySelectorAll('.folder-open-tabs-folder-close-icon')]
+            .map(icon => Number.parseFloat(icon.style.opacity))
+        : [],
+    };
+  `);
+  const folderCloseCompletionState = () => run(`
+    const folder = window.__folderTest.folder;
+    const label = folder.querySelector(':scope > .tab-group-label-container');
+    const animation = label?.getAnimations().find(
+      item => item.id === 'folder-open-tabs-folder-close-completion'
+    );
+    return {
+      animationCount: animation ? 1 : 0,
+      duration: animation?.effect.getTiming().duration,
+      looping: animation?.effect.getTiming().iterations === Infinity,
+      playState: animation?.playState,
+      transforms: animation?.effect.getKeyframes().map(frame => frame.transform) ?? [],
+    };
+  `);
+  const folderCloseCompletionParticleState = () => run(`
+    const effects = [
+      ...document.querySelectorAll(
+        '.folder-open-tabs-folder-close-completion-particle-effect'
+      ),
+    ];
+    const effect = effects.at(-1);
+    const particles = effect
+      ? [...effect.querySelectorAll('.folder-open-tabs-folder-close-completion-particle')]
+      : [];
+    const animations = particles.flatMap(particle => particle.getAnimations());
+    return {
+      effectCount: effects.length,
+      renderer: effect?.dataset.renderer,
+      particleCount: particles.length,
+      animationCount: animations.length,
+      durations: animations.map(animation => animation.effect.getTiming().duration),
+      shapes: particles.map(particle => ({
+        width: particle.style.width,
+        height: particle.style.height,
+        borderRadius: particle.style.borderRadius,
+      })),
+      keyframes: animations[0]?.effect.getKeyframes().map(frame => frame.transform) ?? [],
+    };
+  `);
   const allUnloadedFolderMotionState = () => run(`
     const folder = window.__allUnloadedFolderTimingTest.folder;
-    return folder.getAnimations({ subtree: true }).map(animation => ({
+    return folder.getAnimations({ subtree: true })
+      .filter(animation => !animation.id?.startsWith('folder-open-tabs-') && animation.animationName !== 'folder-open-tabs-folder-open-row-reveal')
+      .map(animation => ({
       target: animation.effect?.target?.className ?? animation.effect?.target?.localName,
       duration: animation.effect?.getTiming().duration,
       easing: animation.effect?.getTiming().easing,
@@ -192,6 +302,10 @@ try {
         : null,
       selectionHighlightHidden:
         document.getElementById('folder-open-tabs-selection-highlight')?.hidden ?? true,
+      closingTabTargeted: window.__closeParticleTest.tab.hasAttribute('folder-open-tabs-selection-target'),
+      highlightTracksFallback: document.getElementById('folder-open-tabs-selection-highlight')?.hidden ||
+        (window.__folderOpenTabsSelectionHighlightController.currentTab === gBrowser.selectedTab &&
+         gBrowser.selectedTab !== window.__closeParticleTest.tab),
       particleCount: particles.length,
       particleDurations: particleAnimations.map(animation => animation.effect.getTiming().duration),
       particleDelays: particleAnimations.map(animation => animation.effect.getTiming().delay),
@@ -319,7 +433,8 @@ try {
     };
   `);
   await sleep(3000);
-  console.log(JSON.stringify(await run('return { version: Services.appinfo.version, folders: !!window.gZenFolders, workspaces: !!window.gZenWorkspaces, url: location.href };')));
+  const testEnvironment = await run('return { version: Services.appinfo.version, buildID: Services.appinfo.appBuildID, channel: Services.prefs.getCharPref("app.update.channel"), os: Services.appinfo.OS, folders: !!window.gZenFolders, workspaces: !!window.gZenWorkspaces, url: location.href };');
+  console.log(JSON.stringify(testEnvironment));
   await run(selectionMotionScript);
   console.log(JSON.stringify(await run(`
     const principal = Services.scriptSecurityManager.getSystemPrincipal();
@@ -344,13 +459,35 @@ try {
   await sleep(40);
   const opening = await state();
   const openingMotion = await folderMotionState();
+  const openingPresentation = await folderOpenPresentationState();
+  assert.equal(openingPresentation.effectCount, 1, 'Folder expansion starts the icon flyout layer');
+  assert.equal(openingPresentation.motion, true, 'Folder expansion marks the open presentation state');
+  assert.equal(openingPresentation.iconCount, openingPresentation.itemCount, 'Each visible folder item gets one flying icon');
+  assert(
+    openingPresentation.iconAssetCount > 0,
+    'Flying icons reuse loaded source assets when tab icons exist'
+  );
+  assert(
+    openingPresentation.iconBackgroundColors.every(color => color === 'rgba(0, 0, 0, 0)'),
+    'Flying icons do not use an opaque placeholder background'
+  );
+  assert(
+    openingPresentation.iconFilters.every(filter => filter === 'none'),
+    'Flying icons do not use a glow filter'
+  );
+  assert(openingPresentation.iconCount >= 2, 'Folder expansion flies out multiple tab icons');
+  assert(openingPresentation.rowAnimationCount >= 1, 'Folder rows reveal with the icon flyout');
+  assert(
+    openingPresentation.rowDelays.length >= 2 && openingPresentation.rowDelays[0] < openingPresentation.rowDelays[1],
+    'Folder rows schedule their reveals from top to bottom with a stagger'
+  );
   const openingToggleMotion = openingMotion.filter(animation => animation.duration === 280);
   assert(
     openingToggleMotion.length > 0,
     'Folder expansion uses the slower 280ms motion'
   );
   assert(
-    openingMotion.every(animation => animation.duration !== 180),
+    openingMotion.every(animation => animation.id?.startsWith('folder-open-tabs-') || animation.duration !== 180),
     'Folder expansion does not retain Zen native 180ms timing'
   );
   assert(
@@ -367,19 +504,39 @@ try {
     opening[1].top >= opening[0].bottom - 0.5,
     'Loaded background tabs do not overlap the first tab while expanding'
   );
-  await sleep(460);
+  await sleep(620);
+  const finishedOpeningPresentation = await folderOpenPresentationState();
+  assert.equal(finishedOpeningPresentation.effectCount, 0, 'Folder icon flyout finishes within a short interaction window');
+  assert.equal(finishedOpeningPresentation.motion, false, 'Folder icon flyout cleans up its motion state');
   const expandedBeforeClosing = await state();
   await run('window.__folderTest.folder.collapsed=true;');
   await sleep(60);
   const closing = await state();
   const closingMotion = await folderMotionState();
+  const closingPresentation = await folderClosePresentationState();
+  const closingShake = await folderCloseCompletionState();
+  assert.equal(closingPresentation.effectCount, 1, 'Folder collapse starts the icon return layer');
+  assert.equal(closingPresentation.motion, true, 'Folder collapse marks the return presentation state');
+  assert.equal(closingPresentation.iconCount, closingPresentation.itemCount, 'Each visible folder item gets one returning icon');
+  assert(
+    closingPresentation.iconAssetCount > 0,
+    'Returning icons reuse loaded source assets when tab icons exist'
+  );
+  assert(
+    closingPresentation.iconBackgroundColors.every(color => color === 'rgba(0, 0, 0, 0)'),
+    'Returning icons do not use an opaque placeholder background'
+  );
+  assert(
+    closingPresentation.iconFilters.every(filter => filter === 'none'),
+    'Returning icons do not use a glow filter'
+  );
   const closingToggleMotion = closingMotion.filter(animation => animation.duration === 280);
   assert(
     closingToggleMotion.length > 0,
     'Folder collapse uses the slower 280ms motion'
   );
   assert(
-    closingMotion.every(animation => animation.duration !== 180),
+    closingMotion.every(animation => animation.id?.startsWith('folder-open-tabs-') || animation.duration !== 180),
     'Folder collapse does not retain Zen native 180ms timing'
   );
   assert(
@@ -399,7 +556,39 @@ try {
       closing[2].opacity < 1,
     'Unloaded tab remains in an intermediate state during selected-folder collapse'
   );
-  await sleep(500);
+  assert.equal(closingShake.animationCount, 1, 'Folder shakes while icons are entering');
+  assert.equal(closingShake.looping, true, 'Folder shake loops during icon storage');
+  await sleep(360);
+  const finishedClosingPresentation = await folderClosePresentationState();
+  const closingCompletion = await folderCloseCompletionState();
+  const closingCompletionParticles = await folderCloseCompletionParticleState();
+  assert.equal(finishedClosingPresentation.effectCount, 0, 'Folder icon return finishes within a short interaction window');
+  assert.equal(finishedClosingPresentation.motion, false, 'Folder icon return cleans up its motion state');
+  assert.equal(closingCompletion.animationCount, 1, 'Folder close completion adds a folder nudge');
+  assert.equal(closingCompletion.duration, 180, 'Folder close completion nudge stays short');
+  assert(
+    closingCompletion.transforms.some(transform => transform.includes('translate3d(-4px, -3px')),
+    'Folder close completion starts with an upper-left nudge'
+  );
+  assert.equal(closingCompletionParticles.effectCount, 1, 'Folder close completion creates one fan particle overlay');
+  assert.equal(closingCompletionParticles.renderer, 'folder-close-completion-fan');
+  assert.equal(closingCompletionParticles.particleCount, 3, 'Folder close completion uses three fan particles');
+  assert.equal(closingCompletionParticles.animationCount, 3);
+  assert(
+    closingCompletionParticles.shapes.every(
+      ({ width, height, borderRadius }) => width !== height && borderRadius === '1px'
+    ),
+    'Folder close completion uses three rectangular particles'
+  );
+  assert(
+    closingCompletionParticles.durations.every(duration => duration >= 260 && duration <= 278),
+    'Folder close completion particles stay short'
+  );
+  assert(
+    closingCompletionParticles.keyframes.some(transform => transform.includes('translate3d(-10px, -13px')),
+    'Folder close completion fans particles upward and left'
+  );
+  await sleep(220);
   let result = await state();
   assert(result[0].height > 0 && !result[0].outlined, 'Selected tab keeps the native appearance');
   assert(result[1].height > 0 && result[1].outlined, 'Loaded background tab remains outlined');
@@ -570,6 +759,25 @@ try {
   assert(Math.abs(highlightAfterMove.top - highlightAfterMove.selectedTop) < 0.5, 'Selected highlight finishes on the new tab');
   assert.equal((await pageDepthState()).scale, 1, 'Selected page finishes at its natural scale');
   console.log('PASS: selected page gains depth without fading or delaying tab display');
+  await send('WebDriver:PerformActions', { actions: [{ type:'pointer', id:'mouse', parameters:{pointerType:'mouse'}, actions:[
+    {type:'pointerMove',duration:0,origin:'viewport',x:1100,y:600},
+  ] }] });
+  await sleep(150);
+  await run(`
+    const background = gBrowser.selectedTab.querySelector(':scope > .tab-stack > .tab-background');
+    window.__appearanceAudit = { background, original:background.style.getPropertyValue('background'),
+      priority:background.style.getPropertyPriority('background') };
+    background.style.setProperty('background','rgb(1, 2, 3)','important');
+  `);
+  await sleep(100);
+  assert.equal(await run("return getComputedStyle(document.getElementById('folder-open-tabs-selection-highlight')).backgroundColor;"),
+    'rgb(1, 2, 3)', 'Appearance cache updates after an external selected-background change');
+  await run(`
+    const {background,original,priority} = window.__appearanceAudit;
+    original ? background.style.setProperty('background',original,priority) : background.style.removeProperty('background');
+  `);
+  await sleep(100);
+  console.log('PASS: selected appearance cache follows external styles');
   console.log('PASS: actual mouse selection and outline transfer');
 
   await run(`
@@ -629,8 +837,10 @@ try {
   assert.equal(closeParticleDuringClose.effectCount, 1, 'Ungrouped tab close creates one particle overlay');
   assert.equal(closeParticleDuringClose.renderer, 'particles-only');
   assert.equal(closeParticleDuringClose.ghostCount, 0, 'Closed tab ghost is never reconstructed');
-  assert.equal(closeParticleDuringClose.closedTabVisibility, 'hidden', 'Closing tab stays hidden');
-  assert.equal(closeParticleDuringClose.selectionHighlightHidden, true, 'Selection highlight is removed before close motion');
+  assert(!closeParticleDuringClose.closedTabConnected || closeParticleDuringClose.closedTabVisibility === 'hidden',
+    'Closing tab is hidden or already removed');
+  assert.equal(closeParticleDuringClose.closingTabTargeted, false, 'Closing tab releases its selection highlight');
+  assert.equal(closeParticleDuringClose.highlightTracksFallback, true, 'Visible selection highlight belongs to the fallback tab');
   assert.equal(closeParticleDuringClose.particleCount, 60, 'Close effect uses 60 particles');
   assert.equal(closeParticleDuringClose.particleDurations.length, 60);
   assert(
@@ -1428,12 +1638,67 @@ try {
   );
   console.log('PASS: empty folder selection retargets the highlight');
 
+  await run(`
+    const principal = Services.scriptSecurityManager.getSystemPrincipal();
+    window.__burstLimitTabs = Array.from({length:6}, () => gBrowser.addTab('about:blank', {
+      triggeringPrincipal:principal, skipAnimation:true, inBackground:true,
+    }));
+  `);
+  await sleep(150);
+  const particleLimit = await run(`
+    const c = window.__folderOpenTabsSelectionHighlightController;
+    for (const tab of window.__burstLimitTabs) gBrowser.removeTab(tab,{animate:false});
+    return {effects:c.closeParticleEffects.size, particles:document.querySelectorAll('.folder-open-tabs-close-particle').length};
+  `);
+  assert(particleLimit.effects <= 3 && particleLimit.particles <= 180, 'Rapid close caps simultaneous particle effects');
+  await sleep(800);
+  const unrelatedTiming = await run(`
+    const folder = window.__folderTest.folder;
+    const c = window.__folderOpenTabsSelectionHighlightController;
+    const animation = folder.querySelector('.tab-group-label-container').animate(
+      [{transform:'translateX(0px)'},{transform:'translateX(1px)'}],{duration:900});
+    c.retimeFolderAnimations(folder,new Set());
+    const duration = animation.effect.getTiming().duration;
+    animation.cancel();
+    return duration;
+  `);
+  assert.equal(unrelatedTiming,900,'Folder timing leaves unrelated anonymous transform animations intact');
+  await run(`
+    const c = window.__folderOpenTabsSelectionHighlightController;
+    window.__lifecycleAudit = {c, lateTimer:false, lateFrame:false};
+    c.setTimer(() => window.__lifecycleAudit.lateTimer = true,30);
+    c.requestFrame(() => window.__lifecycleAudit.lateFrame = true);
+    c.destroy();
+    c.destroy();
+  `);
+  await sleep(100);
+  const destroyedState = await run(`
+    const {c,lateTimer,lateFrame} = window.__lifecycleAudit;
+    return {lateTimer,lateFrame,timers:c.deferredTimers.size,frames:c.deferredFrames.size,
+      connected:c.highlight.isConnected};
+  `);
+  assert.deepEqual(destroyedState,{lateTimer:false,lateFrame:false,timers:0,frames:0,connected:false},
+    'Destroyed controller cancels pending work and tolerates repeated destruction');
+  await run(selectionMotionScript);
+  console.log('PASS: particle limits, timing isolation, and controller unload');
+
   await run('gBrowser.selectedTab=window.__folderTest.tabs[1];');
   await sleep(300);
-  await writeFile(path.join(root,'tests','results.json'), `${JSON.stringify({version:'1.22.2b',loadMethod:'userChrome.css @import',presentationChecks:'passed',nativeVisibilityMismatch},null,2)}\n`);
+  await writeFile(path.join(root,'tests','results.json'), `${JSON.stringify({...testEnvironment,loadMethod:'userChrome.css @import',presentationChecks:'passed',nativeVisibilityMismatch},null,2)}\n`);
   console.log(`LIMITATION: CSS-only internal visibility mismatch = ${nativeVisibilityMismatch}`);
-  await send('Marionette:Quit', { flags: ['eForceQuit'] });
+  await quitBrowser();
+  quitBrowser = null;
 } finally {
+  if (quitBrowser && browser.exitCode === null) {
+    try { await quitBrowser(); } catch (error) { console.error(`Normal shutdown failed: ${error.message}`); }
+  }
   socket?.destroy();
-  browser.kill();
+  if (browser.exitCode === null) {
+    await Promise.race([new Promise(resolve => browser.once('exit', resolve)), sleep(3000)]);
+  }
+  if (browser.exitCode !== null && path.dirname(profile) === root && path.basename(profile).startsWith('.test-profile-')) {
+    await rm(profile, { recursive: true, force: true, maxRetries: 4, retryDelay: 500 });
+  } else {
+    console.error(`Isolated Zen is still running (PID ${browser.pid}); profile retained: ${profile}`);
+  }
 }

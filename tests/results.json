@@ -1,5 +1,11 @@
 {
-  "version": "1.22.2b",
+  "version": "1.22.3b",
+  "buildID": "20260922050124",
+  "channel": "release",
+  "os": "WINNT",
+  "folders": true,
+  "workspaces": true,
+  "url": "chrome://browser/content/browser.xhtml",
   "loadMethod": "userChrome.css @import",
   "presentationChecks": "passed",
   "nativeVisibilityMismatch": true

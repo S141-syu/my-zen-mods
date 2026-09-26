@@ -1,4 +1,4 @@
-/* Folder Open Tabs — Zen Browser 1.22.2b.
+/* Folder Open Tabs — Zen Browser 1.22.3b.
  * Loaded tabs remain visible inside collapsed folders.
  * This stylesheet changes presentation, not Zen's tab lifecycle.
  */
@@ -9,6 +9,65 @@
   --folder-open-tabs-download-arrow-duration: 520ms;
   --folder-open-tabs-download-tray-wiggle-duration: 280ms;
   --folder-open-tabs-download-animation-easing: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Slightly round the floating search bar opened from a new tab. */
+#urlbar[zen-floating-urlbar="true"][breakout-extend],
+#urlbar[zen-floating-urlbar="true"][breakout-extend] .urlbar-background {
+  border-radius: 24px !important;
+}
+
+@keyframes folder-open-tabs-app-menu-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #appMenu-popup[folder-open-tabs-menu-fade-in] > #appMenu-multiView {
+    animation: folder-open-tabs-app-menu-fade-in 160ms ease-out both;
+  }
+}
+
+@keyframes folder-open-tabs-history-arrow-left-return {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(-5px);
+  }
+}
+
+@keyframes folder-open-tabs-history-arrow-right-return {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(5px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #back-button[folder-open-tabs-history-arrow-motion] > .toolbarbutton-icon {
+    animation: folder-open-tabs-history-arrow-left-return 320ms ease-in-out both;
+  }
+
+  #forward-button[folder-open-tabs-history-arrow-motion] > .toolbarbutton-icon {
+    animation: folder-open-tabs-history-arrow-right-return 320ms ease-in-out both;
+  }
+
+  #back-button:-moz-locale-dir(rtl)[folder-open-tabs-history-arrow-motion]
+    > .toolbarbutton-icon {
+    animation-name: folder-open-tabs-history-arrow-right-return;
+  }
+
+  #forward-button:-moz-locale-dir(rtl)[folder-open-tabs-history-arrow-motion]
+    > .toolbarbutton-icon {
+    animation-name: folder-open-tabs-history-arrow-left-return;
+  }
 }
 
 @property --folder-open-tabs-unloaded-height {
@@ -175,7 +234,7 @@
   pointer-events: none;
   contain: layout style paint;
   transform-origin: top left;
-  will-change: top, left, width, height, transform;
+  will-change: transform;
 }
 
 #folder-open-tabs-selection-highlight[hidden] {
@@ -294,6 +353,95 @@
 
 #tabbrowser-tabs zen-folder[collapsed] .tabbrowser-tab:not([pending], [discarded], [zen-empty-tab], [hidden], [closing]) {
   display: flex !important;
+}
+
+/* The real tab rows keep their layout while their icons travel out of the folder. */
+#tabbrowser-tabs zen-folder[folder-open-tabs-open-motion] [folder-open-tabs-open-item]
+  :is(.tab-icon-image, .tab-throbber, .tab-icon, .tab-group-folder-icon) {
+  visibility: hidden !important;
+}
+
+/* The real row icons stay hidden while they travel back into the closed folder. */
+#tabbrowser-tabs zen-folder[folder-open-tabs-close-motion] [folder-open-tabs-close-item]
+  :is(.tab-icon-image, .tab-throbber, .tab-icon, .tab-group-folder-icon) {
+  visibility: hidden !important;
+}
+
+@keyframes folder-open-tabs-folder-open-row-reveal {
+  0% {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0 round 13px);
+    transform: translateY(-3px) scaleX(0.96);
+  }
+  58% {
+    opacity: 0.82;
+    clip-path: inset(0 18% 0 0 round 13px);
+    transform: translateY(0) scaleX(0.995);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(0 round 13px);
+    transform: none;
+  }
+}
+
+#tabbrowser-tabs zen-folder[folder-open-tabs-open-motion]
+  [folder-open-tabs-open-item] > .tab-stack,
+#tabbrowser-tabs zen-folder[folder-open-tabs-open-motion]
+  zen-folder[folder-open-tabs-open-item] > .tab-group-label-container {
+  animation: folder-open-tabs-folder-open-row-reveal 360ms cubic-bezier(0.22, 0.8, 0.36, 1)
+    var(--folder-open-tabs-open-delay, 0ms) both;
+}
+
+.folder-open-tabs-folder-open-effect,
+.folder-open-tabs-folder-open-icon,
+.folder-open-tabs-folder-close-effect,
+.folder-open-tabs-folder-close-icon,
+.folder-open-tabs-folder-close-completion-particle-effect,
+.folder-open-tabs-folder-close-completion-particle {
+  pointer-events: none !important;
+}
+
+/* Reuse the already-loaded tab/folder icon instead of showing a placeholder square. */
+.folder-open-tabs-folder-open-icon > .folder-open-tabs-folder-open-source,
+.folder-open-tabs-folder-close-icon > .folder-open-tabs-folder-open-source {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  box-sizing: border-box !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: none !important;
+  object-fit: contain !important;
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  #tabbrowser-tabs zen-folder[folder-open-tabs-open-motion] [folder-open-tabs-open-item]
+    :is(.tab-icon-image, .tab-throbber, .tab-icon, .tab-group-folder-icon) {
+    visibility: visible !important;
+  }
+
+  #tabbrowser-tabs zen-folder[folder-open-tabs-close-motion] [folder-open-tabs-close-item]
+    :is(.tab-icon-image, .tab-throbber, .tab-icon, .tab-group-folder-icon) {
+    visibility: visible !important;
+  }
+
+  #tabbrowser-tabs zen-folder[folder-open-tabs-open-motion]
+    [folder-open-tabs-open-item] > .tab-stack,
+  #tabbrowser-tabs zen-folder[folder-open-tabs-open-motion]
+    zen-folder[folder-open-tabs-open-item] > .tab-group-label-container {
+    animation: none !important;
+    clip-path: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

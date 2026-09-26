@@ -1,0 +1,141 @@
+{
+  "date": "2026-09-26T04:43:01.638Z",
+  "environment": {
+    "version": "1.22.3b",
+    "buildID": "20260922050124",
+    "channel": "release",
+    "os": "WINNT",
+    "reducedMotion": false,
+    "orientation": "vertical"
+  },
+  "sourceRoot": "C:\\Users\\admin\\Desktop\\Zen mod\\.test-profile-performance-baseline",
+  "measurement": "Instrumented headless call counts; not CPU/GPU/frame-time measurements",
+  "samples": [
+    {
+      "label": "idle-1000ms",
+      "counts": {}
+    },
+    {
+      "label": "one-pointerdown-plus-mousedown",
+      "counts": {
+        "rect": 18,
+        "observerCallbacks": 1,
+        "observerRecords": 1,
+        "startTracking": 1,
+        "scheduleSelectionSync": 1,
+        "reconcileSelection": 17
+      }
+    },
+    {
+      "label": "expand-20-tabs-20-followers-1000ms",
+      "counts": {
+        "rect": 8728,
+        "computedStyle": 15064,
+        "retimeFolderAnimations": 3,
+        "getFolderOpenTarget": 2120,
+        "getFolderOpenVisualSource": 2140,
+        "observerCallbacks": 8,
+        "observerRecords": 129,
+        "startTracking": 76,
+        "scheduleSelectionSync": 60,
+        "trackLayout": 72,
+        "readAppearance": 72,
+        "applyAppearance": 72,
+        "reconcileSelection": 16
+      }
+    },
+    {
+      "label": "collapse-20-tabs-20-followers-1000ms",
+      "counts": {
+        "rect": 273,
+        "getFolderOpenTarget": 20,
+        "getFolderOpenVisualSource": 40,
+        "computedStyle": 300,
+        "retimeFolderAnimations": 3,
+        "observerCallbacks": 3,
+        "observerRecords": 3,
+        "startTracking": 94,
+        "scheduleSelectionSync": 91,
+        "trackLayout": 59,
+        "readAppearance": 59,
+        "applyAppearance": 59,
+        "reconcileSelection": 3
+      }
+    },
+    {
+      "label": "close-normal-tab-19-followers-1000ms",
+      "counts": {
+        "clearNewTabFocusState": 1,
+        "rect": 109,
+        "readAppearance": 102,
+        "computedStyle": 104,
+        "applyAppearance": 102,
+        "startTracking": 12,
+        "scheduleSelectionSync": 8,
+        "observerCallbacks": 6,
+        "observerRecords": 41,
+        "trackLayout": 100,
+        "reconcileSelection": 4
+      }
+    },
+    {
+      "label": "expand-100-tabs-20-followers-1000ms",
+      "counts": {
+        "rect": 11326,
+        "computedStyle": 20266,
+        "retimeFolderAnimations": 3,
+        "getFolderOpenTarget": 2800,
+        "getFolderOpenVisualSource": 2900,
+        "observerCallbacks": 8,
+        "observerRecords": 289,
+        "startTracking": 232,
+        "scheduleSelectionSync": 220,
+        "trackLayout": 34,
+        "readAppearance": 34,
+        "applyAppearance": 34,
+        "reconcileSelection": 12
+      }
+    },
+    {
+      "label": "collapse-100-tabs-20-followers-1000ms",
+      "counts": {
+        "rect": 415,
+        "getFolderOpenTarget": 100,
+        "getFolderOpenVisualSource": 200,
+        "computedStyle": 1229,
+        "retimeFolderAnimations": 3,
+        "observerCallbacks": 3,
+        "observerRecords": 3,
+        "startTracking": 414,
+        "scheduleSelectionSync": 411,
+        "trackLayout": 28,
+        "readAppearance": 28,
+        "applyAppearance": 28,
+        "reconcileSelection": 3
+      }
+    },
+    {
+      "label": "close-normal-tab-19-followers-1000ms",
+      "counts": {
+        "clearNewTabFocusState": 1,
+        "rect": 112,
+        "readAppearance": 105,
+        "computedStyle": 107,
+        "applyAppearance": 105,
+        "startTracking": 13,
+        "scheduleSelectionSync": 9,
+        "observerCallbacks": 7,
+        "observerRecords": 42,
+        "trackLayout": 103,
+        "reconcileSelection": 4
+      }
+    }
+  ],
+  "lifecycle": {
+    "before": 0,
+    "afterDestroy": {
+      "followerMotions": 0,
+      "detachedHighlight": true
+    }
+  }
+}
